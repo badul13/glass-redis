@@ -1,6 +1,8 @@
 package glassredis.server;
 
+import glassredis.command.Command;
 import glassredis.command.CommandRegistry;
+import glassredis.resp.RespValue;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +16,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -155,6 +158,33 @@ class ServerSmokeTest {
         try (Client client = connect()) {
             assertEquals("+OK", client.command("QUIT\r\n"));
             assertTrue(client.isClosedByServer());
+        }
+    }
+
+    @Test
+    @DisplayName("명령 실행 중 Error 가 나면 클라이언트를 멈춘 채 두지 않고 서버가 종료된다")
+    void fatalErrorStopsServer() throws Exception {
+        CommandRegistry registry = CommandRegistry.withBuiltins();
+        registry.register(new Command() {
+            @Override
+            public String name() {
+                return "CRASH";
+            }
+
+            @Override
+            public RespValue execute(List<byte[]> args) {
+                throw new StackOverflowError("테스트에서 일부러 던짐");
+            }
+        });
+
+        // 공유 서버를 죽이면 다른 테스트가 깨지므로 이 테스트만의 서버를 띄운다.
+        try (RedisServer doomed = new RedisServer("127.0.0.1", 0, registry)) {
+            doomed.start();
+            try (Client client = new Client(doomed.port())) {
+                client.send("CRASH\r\n");
+                assertTrue(client.isClosedByServer(), "응답을 기다리며 멈추지 않고 커넥션이 끊겨야 한다");
+            }
+            doomed.awaitStop(); // 서버가 멈추지 않았다면 @Timeout 에 걸린다
         }
     }
 

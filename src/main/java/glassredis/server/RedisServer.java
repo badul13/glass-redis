@@ -33,6 +33,7 @@ public final class RedisServer implements AutoCloseable {
     private volatile boolean running;
     private ServerSocket serverSocket;
     private ExecutorService connectionExecutor;
+    private CommandLoop commandLoop;
 
     public RedisServer(String bindAddress, int port, CommandRegistry registry) {
         this.bindAddress = bindAddress;
@@ -48,6 +49,8 @@ public final class RedisServer implements AutoCloseable {
         serverSocket.bind(new InetSocketAddress(bindAddress, requestedPort), BACKLOG);
 
         running = true;
+        commandLoop = new CommandLoop(this::close);
+        commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
     }
@@ -74,7 +77,11 @@ public final class RedisServer implements AutoCloseable {
             // 종료 중의 실패는 알릴 상대가 없다
         }
         if (connectionExecutor != null) {
+            // 실행 스레드의 답을 기다리던 커넥션 스레드도 이 인터럽트로 풀려난다.
             connectionExecutor.shutdownNow();
+        }
+        if (commandLoop != null) {
+            commandLoop.close();
         }
     }
 
@@ -83,7 +90,7 @@ public final class RedisServer implements AutoCloseable {
             while (running) {
                 Socket socket = serverSocket.accept();
                 long id = nextConnectionId.getAndIncrement();
-                connectionExecutor.submit(new Connection(socket, registry, id));
+                connectionExecutor.submit(new Connection(socket, registry, commandLoop, id));
             }
         } catch (IOException e) {
             if (running) {

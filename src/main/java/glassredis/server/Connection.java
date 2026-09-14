@@ -13,6 +13,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutionException;
 
 /**
  * 커넥션 하나의 생명주기. 가상 스레드 하나가 이 객체 하나를 끝까지 담당한다.
@@ -30,11 +31,13 @@ final class Connection implements Runnable {
 
     private final Socket socket;
     private final CommandRegistry registry;
+    private final CommandLoop commandLoop;
     private final long id;
 
-    Connection(Socket socket, CommandRegistry registry, long id) {
+    Connection(Socket socket, CommandRegistry registry, CommandLoop commandLoop, long id) {
         this.socket = socket;
         this.registry = registry;
+        this.commandLoop = commandLoop;
         this.id = id;
     }
 
@@ -84,12 +87,19 @@ final class Connection implements Runnable {
                 // 모르는 명령은 프레이밍이 멀쩡하므로 커넥션을 유지한 채 에러만 돌려준다.
                 reply = Errors.unknownCommand(name);
             } else {
+                // 실행은 직접 하지 않고 실행 스레드에 맡긴 뒤 답을 기다린다.
+                // 응답을 받기 전에는 다음 명령을 읽지 않으므로, 파이프라이닝으로 몰아 보낸 명령도
+                // 보낸 순서대로 실행되고 응답도 그 순서로 나간다.
                 try {
-                    reply = command.execute(argv.subList(1, argv.size()));
-                } catch (RuntimeException e) {
-                    // 명령 구현의 버그로 커넥션 전체가 죽지 않도록 막아둔다.
-                    log("명령 %s 처리 중 예외: %s", name, e);
-                    reply = Errors.internal(e.getClass().getSimpleName());
+                    reply = commandLoop.submit(command, argv.subList(1, argv.size())).get();
+                } catch (InterruptedException e) {
+                    // 서버가 종료하면서 커넥션 스레드를 깨웠다.
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (ExecutionException e) {
+                    // 실행 스레드가 예외를 에러 응답으로 바꿔 채우므로 여기 올 일은 없어야 한다.
+                    log("명령 %s 의 응답을 받지 못했습니다: %s", name, e.getCause());
+                    reply = Errors.internal(String.valueOf(e.getCause()));
                 }
             }
 
