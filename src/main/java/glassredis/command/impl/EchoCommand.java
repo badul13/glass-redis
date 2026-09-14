@@ -1,6 +1,7 @@
 package glassredis.command.impl;
 
 import glassredis.command.Command;
+import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 
@@ -20,7 +21,7 @@ public final class EchoCommand implements Command {
     }
 
     @Override
-    public RespValue execute(List<byte[]> args) {
+    public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != 1) {
             return Errors.wrongNumberOfArguments(name());
         }

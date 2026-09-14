@@ -2,6 +2,7 @@ package glassredis.server;
 
 import glassredis.command.Command;
 import glassredis.command.CommandRegistry;
+import glassredis.command.Context;
 import glassredis.resp.RespValue;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -16,7 +17,11 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -95,7 +100,7 @@ class ServerSmokeTest {
     @DisplayName("모르는 명령에는 에러를 주지만 커넥션은 유지한다")
     void unknownCommandKeepsConnection() throws IOException {
         try (Client client = connect()) {
-            assertEquals("-ERR unknown command 'NOPE'", client.command("NOPE\r\n"));
+            assertEquals("-ERR unknown command 'NOPE', with args beginning with: ", client.command("NOPE\r\n"));
             // 같은 커넥션에서 다음 명령이 계속 동작해야 한다
             assertEquals("+PONG", client.command("PING\r\n"));
         }
@@ -162,6 +167,61 @@ class ServerSmokeTest {
     }
 
     @Test
+    @DisplayName("한 커넥션에서 SET 한 값을 다른 커넥션에서 GET 으로 읽는다")
+    void setAndGetAcrossConnections() throws IOException {
+        try (Client writer = connect(); Client reader = connect()) {
+            assertEquals("+OK", writer.command("SET smoke:greeting hello\r\n"));
+            reader.send("GET smoke:greeting\r\n");
+            assertEquals("$5", reader.readLine());
+            assertEquals("hello", reader.readLine());
+            assertEquals("$-1", reader.command("GET smoke:missing\r\n"));
+        }
+    }
+
+    @Test
+    @DisplayName("SET 의 EX 옵션으로 건 만료 시간을 TTL 로 읽는다")
+    void setWithExpiryAndTtl() throws IOException {
+        try (Client client = connect()) {
+            assertEquals("+OK", client.command("SET smoke:ttl v EX 100\r\n"));
+            assertEquals(":100", client.command("TTL smoke:ttl\r\n"));
+        }
+    }
+
+    @Test
+    @DisplayName("여러 클라이언트가 같은 키에 동시에 INCR 해도 증가분이 하나도 사라지지 않는다")
+    void concurrentIncrLosesNothing() throws Exception {
+        int clients = 50;
+        int incrementsPerClient = 1000;
+
+        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<Void>> finished = new ArrayList<>();
+            for (int c = 0; c < clients; c++) {
+                finished.add(pool.submit(() -> {
+                    try (Client client = connect()) {
+                        for (int i = 0; i < incrementsPerClient; i++) {
+                            String reply = client.command("INCR smoke:counter\r\n");
+                            if (!reply.startsWith(":")) {
+                                throw new AssertionError("INCR 응답이 정수가 아닙니다: " + reply);
+                            }
+                        }
+                    }
+                    return null;
+                }));
+            }
+            for (Future<Void> done : finished) {
+                done.get();
+            }
+        }
+
+        String expected = String.valueOf(clients * incrementsPerClient);
+        try (Client client = connect()) {
+            client.send("GET smoke:counter\r\n");
+            assertEquals("$" + expected.length(), client.readLine());
+            assertEquals(expected, client.readLine());
+        }
+    }
+
+    @Test
     @DisplayName("명령 실행 중 Error 가 나면 클라이언트를 멈춘 채 두지 않고 서버가 종료된다")
     void fatalErrorStopsServer() throws Exception {
         CommandRegistry registry = CommandRegistry.withBuiltins();
@@ -172,7 +232,7 @@ class ServerSmokeTest {
             }
 
             @Override
-            public RespValue execute(List<byte[]> args) {
+            public RespValue execute(Context ctx, List<byte[]> args) {
                 throw new StackOverflowError("테스트에서 일부러 던짐");
             }
         });

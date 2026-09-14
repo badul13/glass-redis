@@ -85,7 +85,7 @@ final class Connection implements Runnable {
             RespValue reply;
             if (command == null) {
                 // 모르는 명령은 프레이밍이 멀쩡하므로 커넥션을 유지한 채 에러만 돌려준다.
-                reply = Errors.unknownCommand(name);
+                reply = Errors.unknownCommand(argv.get(0), argv.subList(1, argv.size()));
             } else {
                 // 실행은 직접 하지 않고 실행 스레드에 맡긴 뒤 답을 기다린다.
                 // 응답을 받기 전에는 다음 명령을 읽지 않으므로, 파이프라이닝으로 몰아 보낸 명령도

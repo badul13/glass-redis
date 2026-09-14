@@ -1,6 +1,7 @@
 package glassredis.server;
 
 import glassredis.command.CommandRegistry;
+import glassredis.store.Keyspace;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -49,7 +50,7 @@ public final class RedisServer implements AutoCloseable {
         serverSocket.bind(new InetSocketAddress(bindAddress, requestedPort), BACKLOG);
 
         running = true;
-        commandLoop = new CommandLoop(this::close);
+        commandLoop = new CommandLoop(new Keyspace(), this::close);
         commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);

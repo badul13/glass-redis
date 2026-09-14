@@ -1,13 +1,21 @@
 package glassredis.server;
 
 import glassredis.command.Command;
+import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.resp.RespValue;
+import glassredis.store.ExpiryCycle;
+import glassredis.store.Keyspace;
 
 import java.util.List;
+import java.util.SplittableRandom;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 모든 명령을 스레드 하나에서 차례로 실행한다.
@@ -19,7 +27,8 @@ import java.util.concurrent.LinkedBlockingQueue;
  * <pre>
  *   커넥션 스레드 ─┐
  *   커넥션 스레드 ─┼─▶ 큐 ─▶ 실행 스레드 ─▶ Command.execute()
- *   커넥션 스레드 ─┘
+ *   커넥션 스레드 ─┤
+ *   만료 타이머  ──┘  (100ms 마다 샘플링 작업을 넣음)
  * </pre>
  *
  * <p>이렇게 하면 데이터를 만지는 스레드가 하나로 고정된다. 락 없이 평범한 {@code HashMap} 을 써도 되고,
@@ -34,27 +43,54 @@ import java.util.concurrent.LinkedBlockingQueue;
  */
 final class CommandLoop implements AutoCloseable {
 
+    /** 주기적 만료 샘플링을 1초에 몇 번 돌릴지. 실제 Redis 설정 {@code hz} 의 기본값과 같다. */
+    private static final int EXPIRY_HZ = 10;
+
     /**
      * 크기 제한이 없는 큐를 쓴다. 제한이 없어도 무한정 쌓이지는 않는다 —
-     * 커넥션은 응답을 받기 전까지 다음 명령을 넣지 않으므로,
-     * 큐에 동시에 들어 있는 명령은 많아야 커넥션 수만큼이다.
+     * 커넥션은 응답을 받기 전까지 다음 명령을 넣지 않고, 샘플링 작업은 한 번에 하나만 넣는다.
+     * 그래서 큐에 동시에 들어 있는 작업은 많아야 "커넥션 수 + 1" 개다.
      */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
 
     private final Thread thread = Thread.ofPlatform().name("glass-redis-executor").unstarted(this::runLoop);
+
+    /**
+     * 샘플링 주기를 재는 타이머. 시간만 재고 샘플링 작업은 큐에 넣기만 한다.
+     * 타이머 스레드가 키스페이스를 직접 만지면 "실행 스레드만 만진다"는 전제가 깨진다.
+     */
+    private final ScheduledExecutorService expiryTimer = Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().name("glass-redis-expiry-timer").daemon(true).factory());
+
+    /** 샘플링 작업이 이미 큐에서 기다리는 중인지. 실행 스레드가 밀려 있을 때 같은 작업이 줄줄이 쌓이지 않게 한다. */
+    private final AtomicBoolean expiryQueued = new AtomicBoolean();
+
+    /** 명령에 넘기는 서버 상태. 안에 든 키스페이스는 이 클래스의 실행 스레드만 만진다. */
+    private final Context context;
+
+    private final ExpiryCycle expiryCycle;
 
     /** 실행 스레드가 더 이상 돌 수 없게 됐을 때 부른다. 서버는 여기에 자기 종료를 걸어둔다. */
     private final Runnable onFatalError;
 
     private volatile boolean running;
 
-    CommandLoop(Runnable onFatalError) {
+    /**
+     * @param keyspace 넘긴 뒤로는 실행 스레드만 만져야 한다. {@link #start()} 전에 채워 넣는 것까지는 괜찮다.
+     */
+    CommandLoop(Keyspace keyspace, Runnable onFatalError) {
+        this.context = new Context(keyspace);
+        // RandomGenerator.getDefault() 는 쓰지 않는다. 그 구현(L32X64MixRandom)은 jdk.random 모듈에 있어서,
+        // 모듈을 덜어낸 JRE 이미지에서는 서버가 시작하자마자 죽는다. SplittableRandom 은 java.base 에 있다.
+        this.expiryCycle = new ExpiryCycle(keyspace, new SplittableRandom(), ExpiryCycle.DEFAULT_TIME_BUDGET);
         this.onFatalError = onFatalError;
     }
 
     void start() {
         running = true;
         thread.start();
+        long periodMillis = 1000 / EXPIRY_HZ;
+        expiryTimer.scheduleAtFixedRate(this::requestExpiryCycle, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -78,8 +114,19 @@ final class CommandLoop implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        expiryTimer.shutdownNow();
         // take() 에서 기다리는 중이라면 인터럽트로 깨운다.
         thread.interrupt();
+    }
+
+    /** 타이머 스레드에서 불린다. */
+    private void requestExpiryCycle() {
+        if (expiryQueued.compareAndSet(false, true)) {
+            queue.add(() -> {
+                expiryQueued.set(false);
+                expiryCycle.run();
+            });
+        }
     }
 
     private void runLoop() {
@@ -93,8 +140,8 @@ final class CommandLoop implements AutoCloseable {
             try {
                 task.run();
             } catch (Throwable fatal) {
-                // RuntimeException 은 execute() 가 이미 응답으로 바꿨으므로, 여기까지 오는 건 Error 다.
-                // StackOverflowError, OutOfMemoryError 뒤에는 JVM 이나 데이터 상태를 믿을 수 없어서 계속 돌지 않는다.
+                // 명령의 RuntimeException 은 execute() 가 이미 응답으로 바꿨다. 여기까지 오는 건 Error 이거나,
+                // 명령이 아닌 내부 작업(만료 샘플링)이 던진 예외다. 어느 쪽이든 JVM 이나 데이터 상태를 믿을 수 없다.
                 //
                 // 그렇다고 이 스레드만 조용히 끝나면 더 나쁘다. 큐를 꺼낼 스레드가 없어져서
                 // 모든 클라이언트가 답을 영원히 기다리는데, 프로세스와 포트는 살아 있어 밖에서 알아채기 어렵다.
@@ -107,9 +154,9 @@ final class CommandLoop implements AutoCloseable {
         }
     }
 
-    private static RespValue execute(Command command, List<byte[]> args) {
+    private RespValue execute(Command command, List<byte[]> args) {
         try {
-            return command.execute(args);
+            return command.execute(context, args);
         } catch (RuntimeException e) {
             // 명령 구현의 버그는 그 명령의 에러 응답으로 끝낸다. 실행 스레드는 계속 돈다.
             log("명령 %s 처리 중 예외: %s", command.name(), e);

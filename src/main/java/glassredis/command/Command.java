@@ -17,9 +17,10 @@ public interface Command {
     String name();
 
     /**
+     * @param ctx  명령이 쓸 수 있는 서버 상태
      * @param args 명령 이름을 <b>제외한</b> 인자들. 값은 바이너리일 수 있으므로 byte[] 그대로 받는다.
      */
-    RespValue execute(List<byte[]> args);
+    RespValue execute(Context ctx, List<byte[]> args);
 
     /** 응답을 보낸 뒤 커넥션을 닫아야 하는 명령인지. QUIT 만 true 다. */
     default boolean closesConnection() {

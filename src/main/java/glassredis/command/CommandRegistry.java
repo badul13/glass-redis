@@ -1,8 +1,20 @@
 package glassredis.command;
 
+import glassredis.command.impl.AppendCommand;
+import glassredis.command.impl.DelCommand;
 import glassredis.command.impl.EchoCommand;
+import glassredis.command.impl.ExistsCommand;
+import glassredis.command.impl.ExpireCommand;
+import glassredis.command.impl.GetCommand;
+import glassredis.command.impl.IncrementCommand;
+import glassredis.command.impl.MgetCommand;
+import glassredis.command.impl.MsetCommand;
+import glassredis.command.impl.PersistCommand;
 import glassredis.command.impl.PingCommand;
 import glassredis.command.impl.QuitCommand;
+import glassredis.command.impl.SetCommand;
+import glassredis.command.impl.StrlenCommand;
+import glassredis.command.impl.TtlCommand;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -23,12 +35,32 @@ public final class CommandRegistry {
 
     private final Map<String, Command> byName = new HashMap<>();
 
-    /** 0단계에서 지원하는 명령들. */
+    /** 지원하는 명령들. */
     public static CommandRegistry withBuiltins() {
         CommandRegistry registry = new CommandRegistry();
         registry.register(new PingCommand());
         registry.register(new EchoCommand());
         registry.register(new QuitCommand());
+
+        registry.register(new GetCommand());
+        registry.register(new SetCommand());
+        registry.register(new DelCommand());
+        registry.register(new ExistsCommand());
+        registry.register(new MgetCommand());
+        registry.register(new MsetCommand());
+        registry.register(new AppendCommand());
+        registry.register(new StrlenCommand());
+
+        registry.register(IncrementCommand.incr());
+        registry.register(IncrementCommand.decr());
+        registry.register(IncrementCommand.incrBy());
+        registry.register(IncrementCommand.decrBy());
+
+        registry.register(ExpireCommand.seconds());
+        registry.register(ExpireCommand.milliseconds());
+        registry.register(TtlCommand.seconds());
+        registry.register(TtlCommand.milliseconds());
+        registry.register(new PersistCommand());
         return registry;
     }
 

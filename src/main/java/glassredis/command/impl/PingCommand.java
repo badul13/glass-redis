@@ -1,6 +1,7 @@
 package glassredis.command.impl;
 
 import glassredis.command.Command;
+import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 
@@ -22,7 +23,7 @@ public final class PingCommand implements Command {
     }
 
     @Override
-    public RespValue execute(List<byte[]> args) {
+    public RespValue execute(Context ctx, List<byte[]> args) {
         return switch (args.size()) {
             case 0 -> RespValue.PONG;
             case 1 -> new RespValue.BulkString(args.get(0));

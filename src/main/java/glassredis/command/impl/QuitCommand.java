@@ -1,6 +1,7 @@
 package glassredis.command.impl;
 
 import glassredis.command.Command;
+import glassredis.command.Context;
 import glassredis.resp.RespValue;
 
 import java.util.List;
@@ -19,7 +20,7 @@ public final class QuitCommand implements Command {
     }
 
     @Override
-    public RespValue execute(List<byte[]> args) {
+    public RespValue execute(Context ctx, List<byte[]> args) {
         return RespValue.OK;
     }
 
