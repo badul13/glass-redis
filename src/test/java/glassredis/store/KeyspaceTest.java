@@ -1,9 +1,15 @@
 package glassredis.store;
 
+import glassredis.observe.Event;
+import glassredis.observe.Event.RemovalReason;
+import glassredis.observe.EventBuffer;
+import glassredis.observe.EventHub;
+import glassredis.observe.EventRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -17,6 +23,10 @@ class KeyspaceTest {
 
     private final ManualClock clock = new ManualClock(1_000_000);
     private final Keyspace keyspace = new Keyspace(clock);
+
+    private final EventHub hub = new EventHub();
+    private final EventBuffer screen = hub.subscribe();
+    private final Keyspace observed = new Keyspace(clock, hub);
 
     @Test
     @DisplayName("내용이 같으면 다른 배열로도 같은 키를 찾는다")
@@ -79,6 +89,49 @@ class KeyspaceTest {
 
         keyspace.put(Key.of("k"), Entry.of(bytes("v2")));
         assertEquals(0, keyspace.expiringKeyCount());
+    }
+
+    @Test
+    @DisplayName("읽다가 만료를 발견해 지우면, 만료 시각보다 얼마나 늦었는지까지 알린다")
+    void publishesLazyExpiry() {
+        observed.put(Key.of("k"), new Entry(bytes("v"), clock.millis() + 100));
+
+        // 100ms 짜리 키를 130ms 뒤에 읽는다. 아무도 읽지 않는 동안에는 지워지지 않고 있었다.
+        clock.advanceMillis(130);
+        assertNull(observed.get(Key.of("k")));
+
+        Event.KeyRemoved removed = onlyKeyRemoved();
+        assertEquals("k", removed.key());
+        assertEquals(RemovalReason.LAZY_EXPIRED, removed.reason());
+        assertEquals(30, removed.lateByMillis(), "만료 시각보다 30ms 늦게 지워졌다");
+    }
+
+    @Test
+    @DisplayName("DEL 로 지운 것은 만료와 다른 이유로 알린다")
+    void publishesDeletion() {
+        observed.put(Key.of("k"), Entry.of(bytes("v")));
+
+        assertTrue(observed.remove(Key.of("k")));
+
+        Event.KeyRemoved removed = onlyKeyRemoved();
+        assertEquals(RemovalReason.DELETED, removed.reason());
+        assertEquals(0, removed.lateByMillis(), "만료로 지워진 게 아니므로 늦은 시간이 없다");
+    }
+
+    @Test
+    @DisplayName("없는 키를 지우거나 값을 쓰는 것은 알리지 않는다")
+    void publishesNothingWithoutRemoval() {
+        observed.put(Key.of("k"), Entry.of(bytes("v")));
+        assertNull(observed.get(Key.of("nope")));
+        assertFalse(observed.remove(Key.of("nope")));
+
+        assertEquals(List.of(), screen.drain(10));
+    }
+
+    private Event.KeyRemoved onlyKeyRemoved() {
+        List<EventRecord> drained = screen.drain(10);
+        assertEquals(1, drained.size(), "이벤트가 하나만 나와야 한다: " + drained);
+        return (Event.KeyRemoved) drained.get(0).event();
     }
 
     private static byte[] bytes(String text) {

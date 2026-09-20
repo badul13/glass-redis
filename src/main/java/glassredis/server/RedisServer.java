@@ -1,6 +1,8 @@
 package glassredis.server;
 
 import glassredis.command.CommandRegistry;
+import glassredis.observe.EventBus;
+import glassredis.observe.KeyspaceSnapshot;
 import glassredis.store.Keyspace;
 
 import java.io.IOException;
@@ -8,8 +10,11 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -28,6 +33,9 @@ public final class RedisServer implements AutoCloseable {
     private final int requestedPort;
     private final CommandRegistry registry;
 
+    /** 관측을 끄면 {@link EventBus#NONE} 이라 서버 코드에는 아무 비용도 남지 않는다. */
+    private final EventBus events;
+
     private final AtomicLong nextConnectionId = new AtomicLong(1);
     private final CountDownLatch stopped = new CountDownLatch(1);
 
@@ -37,9 +45,14 @@ public final class RedisServer implements AutoCloseable {
     private CommandLoop commandLoop;
 
     public RedisServer(String bindAddress, int port, CommandRegistry registry) {
+        this(bindAddress, port, registry, EventBus.NONE);
+    }
+
+    public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events) {
         this.bindAddress = bindAddress;
         this.requestedPort = port;
         this.registry = registry;
+        this.events = events;
     }
 
     /** 소켓을 열고 accept 루프를 별도 스레드에서 시작한다. 즉시 반환한다. */
@@ -50,7 +63,7 @@ public final class RedisServer implements AutoCloseable {
         serverSocket.bind(new InetSocketAddress(bindAddress, requestedPort), BACKLOG);
 
         running = true;
-        commandLoop = new CommandLoop(new Keyspace(), this::close);
+        commandLoop = new CommandLoop(new Keyspace(events), events, this::close);
         commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
@@ -59,6 +72,23 @@ public final class RedisServer implements AutoCloseable {
     /** 실제로 열린 포트. 생성자에 0 을 주면 OS 가 빈 포트를 골라주므로 테스트에서 유용하다. */
     public int port() {
         return serverSocket.getLocalPort();
+    }
+
+    /**
+     * 대시보드가 그릴 키 목록. 실행 스레드에 부탁해서 받아 온다.
+     *
+     * <p>서버가 멈추는 중이면 그 부탁에 답할 스레드가 없다. 그때는 기다리지 않고 {@code null} 을 준다 —
+     * 대시보드는 이번 차례를 건너뛰면 그만이고, 화면 하나 때문에 종료가 늦어질 이유는 없다.
+     */
+    public KeyspaceSnapshot keyspaceSnapshot() {
+        try {
+            return commandLoop.snapshot(KeyspaceSnapshot.DEFAULT_MAX_KEYS).get(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (ExecutionException | TimeoutException e) {
+            return null;
+        }
     }
 
     /** 서버가 멈출 때까지 블로킹한다. */
@@ -91,7 +121,7 @@ public final class RedisServer implements AutoCloseable {
             while (running) {
                 Socket socket = serverSocket.accept();
                 long id = nextConnectionId.getAndIncrement();
-                connectionExecutor.submit(new Connection(socket, registry, commandLoop, id));
+                connectionExecutor.submit(new Connection(socket, registry, commandLoop, id, events));
             }
         } catch (IOException e) {
             if (running) {

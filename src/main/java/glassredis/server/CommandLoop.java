@@ -3,6 +3,9 @@ package glassredis.server;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.observe.Event;
+import glassredis.observe.EventBus;
+import glassredis.observe.KeyspaceSnapshot;
 import glassredis.resp.RespValue;
 import glassredis.store.ExpiryCycle;
 import glassredis.store.Keyspace;
@@ -70,6 +73,9 @@ final class CommandLoop implements AutoCloseable {
 
     private final ExpiryCycle expiryCycle;
 
+    /** 실행한 명령을 알릴 곳. 관측이 꺼져 있으면 시간을 재지도 않는다. */
+    private final EventBus events;
+
     /** 실행 스레드가 더 이상 돌 수 없게 됐을 때 부른다. 서버는 여기에 자기 종료를 걸어둔다. */
     private final Runnable onFatalError;
 
@@ -78,11 +84,12 @@ final class CommandLoop implements AutoCloseable {
     /**
      * @param keyspace 넘긴 뒤로는 실행 스레드만 만져야 한다. {@link #start()} 전에 채워 넣는 것까지는 괜찮다.
      */
-    CommandLoop(Keyspace keyspace, Runnable onFatalError) {
+    CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
         this.context = new Context(keyspace);
+        this.events = events;
         // RandomGenerator.getDefault() 는 쓰지 않는다. 그 구현(L32X64MixRandom)은 jdk.random 모듈에 있어서,
         // 모듈을 덜어낸 JRE 이미지에서는 서버가 시작하자마자 죽는다. SplittableRandom 은 java.base 에 있다.
-        this.expiryCycle = new ExpiryCycle(keyspace, new SplittableRandom(), ExpiryCycle.DEFAULT_TIME_BUDGET);
+        this.expiryCycle = new ExpiryCycle(keyspace, new SplittableRandom(), ExpiryCycle.DEFAULT_TIME_BUDGET, events);
         this.onFatalError = onFatalError;
     }
 
@@ -98,11 +105,30 @@ final class CommandLoop implements AutoCloseable {
      *
      * <p>호출한 가상 스레드가 {@code get()} 으로 기다리는 동안에는 바탕의 OS 스레드를 반납한다.
      * 그래서 커넥션 수천 개가 동시에 기다리고 있어도 OS 스레드는 몇 개 쓰지 않는다.
+     *
+     * @param connectionId 이 명령을 보낸 커넥션. 실행 자체에는 쓰이지 않고, 대시보드의 명령 스트림에서
+     *                     누가 보낸 명령인지를 보여주는 데만 쓴다.
      */
-    CompletableFuture<RespValue> submit(Command command, List<byte[]> args) {
+    CompletableFuture<RespValue> submit(Command command, List<byte[]> args, long connectionId) {
         CompletableFuture<RespValue> reply = new CompletableFuture<>();
-        queue.add(() -> reply.complete(execute(command, args)));
+        queue.add(() -> reply.complete(execute(command, args, connectionId)));
         return reply;
+    }
+
+    /**
+     * 지금 이 순간의 키스페이스를 뜬다.
+     *
+     * <p>대시보드가 키 목록을 그리려면 키스페이스를 읽어야 하는데, 그건 실행 스레드만 할 수 있는 일이다.
+     * 그래서 HTTP 스레드가 직접 읽지 않고 여기에 작업을 맡긴다. 명령과 같은 큐에 줄을 서므로
+     * 명령이 반쯤 실행된 중간 상태가 찍히는 일도 없다.
+     *
+     * <p>이걸 {@code KEYS} 같은 진짜 명령으로 만들지 않은 이유는, redis-cli 에 내보낼 것도 아니고
+     * 응답이 RESP 여야 할 이유도 없어서다.
+     */
+    CompletableFuture<KeyspaceSnapshot> snapshot(int maxKeys) {
+        CompletableFuture<KeyspaceSnapshot> result = new CompletableFuture<>();
+        queue.add(() -> result.complete(KeyspaceSnapshot.of(context.keyspace(), maxKeys)));
+        return result;
     }
 
     /**
@@ -154,14 +180,25 @@ final class CommandLoop implements AutoCloseable {
         }
     }
 
-    private RespValue execute(Command command, List<byte[]> args) {
+    private RespValue execute(Command command, List<byte[]> args, long connectionId) {
+        // 관측이 꺼져 있으면 시계를 읽지 않는다. System.nanoTime() 은 공짜가 아니라서,
+        // 명령 하나가 수백 ns 로 끝나는 구간에서는 이것만으로도 측정값이 흔들린다.
+        long startNanos = events.enabled() ? System.nanoTime() : 0;
+
+        RespValue reply;
         try {
-            return command.execute(context, args);
+            reply = command.execute(context, args);
         } catch (RuntimeException e) {
             // 명령 구현의 버그는 그 명령의 에러 응답으로 끝낸다. 실행 스레드는 계속 돈다.
             log("명령 %s 처리 중 예외: %s", command.name(), e);
-            return Errors.internal(e.getClass().getSimpleName());
+            reply = Errors.internal(e.getClass().getSimpleName());
         }
+
+        if (events.enabled()) {
+            // 실패한 명령도 그대로 알린다. 무엇이 왜 실패했는지가 화면에서 제일 보고 싶은 것 중 하나다.
+            events.publish(Event.command(connectionId, command.name(), args, System.nanoTime() - startNanos, reply));
+        }
+        return reply;
     }
 
     private static void log(String format, Object... args) {

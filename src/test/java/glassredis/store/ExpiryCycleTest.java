@@ -1,10 +1,16 @@
 package glassredis.store;
 
+import glassredis.observe.Event;
+import glassredis.observe.Event.RemovalReason;
+import glassredis.observe.EventBuffer;
+import glassredis.observe.EventHub;
+import glassredis.observe.EventRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.SplittableRandom;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -70,6 +76,62 @@ class ExpiryCycleTest {
 
         assertEquals(ExpiryCycle.SAMPLE_SIZE, expired);
         assertEquals(1000 - ExpiryCycle.SAMPLE_SIZE, keyspace.size());
+    }
+
+    @Test
+    @DisplayName("샘플링이 지운 키는 읽다가 지워진 것과 다른 이유로 알린다")
+    void publishesActiveExpiry() {
+        EventHub hub = new EventHub();
+        EventBuffer screen = hub.subscribe();
+        Keyspace observed = observedKeyspace(hub, 40);
+
+        int expired = new ExpiryCycle(observed, new SplittableRandom(42), GENEROUS_BUDGET, hub).run();
+
+        assertEquals(40, expired);
+        List<EventRecord> drained = screen.drain(1000);
+        Event.KeyRemoved first = (Event.KeyRemoved) drained.get(0).event();
+        assertEquals(RemovalReason.ACTIVE_EXPIRED, first.reason(),
+                "아무도 읽지 않았는데 사라졌다면 샘플링이 지운 것이다");
+    }
+
+    @Test
+    @DisplayName("주기가 끝나면 몇 바퀴 돌며 몇 개를 뽑아 몇 개를 지웠는지 알린다")
+    void publishesCycleSummary() {
+        EventHub hub = new EventHub();
+        EventBuffer screen = hub.subscribe();
+        Keyspace observed = observedKeyspace(hub, 40);
+
+        new ExpiryCycle(observed, new SplittableRandom(42), GENEROUS_BUDGET, hub).run();
+
+        // 주기 요약은 지운 키를 모두 알린 뒤 마지막에 나온다.
+        List<EventRecord> drained = screen.drain(1000);
+        Event.ExpiryCycleCompleted summary = (Event.ExpiryCycleCompleted) drained.get(drained.size() - 1).event();
+        assertEquals(40, summary.expired());
+        // 한 바퀴는 20개다. 40개가 전부 만료돼 있었으므로 25% 규칙에 걸려 최소 두 바퀴는 돈다.
+        assertTrue(summary.rounds() >= 2, "돈 바퀴 수: " + summary.rounds());
+        assertTrue(summary.sampled() >= 40, "뽑은 수: " + summary.sampled());
+        assertTrue(summary.durationNanos() >= 0);
+    }
+
+    @Test
+    @DisplayName("뽑을 키가 하나도 없는 주기는 알리지 않는다 — 100ms 마다 '할 일 없음'을 보내지 않는다")
+    void publishesNothingWhenIdle() {
+        EventHub hub = new EventHub();
+        EventBuffer screen = hub.subscribe();
+        Keyspace observed = new Keyspace(clock, hub);
+
+        assertEquals(0, new ExpiryCycle(observed, new SplittableRandom(42), GENEROUS_BUDGET, hub).run());
+
+        assertEquals(List.of(), screen.drain(10));
+    }
+
+    private Keyspace observedKeyspace(EventHub hub, int expiredKeys) {
+        Keyspace observed = new Keyspace(clock, hub);
+        for (int i = 0; i < expiredKeys; i++) {
+            observed.put(Key.of("expired:" + i), new Entry("v".getBytes(StandardCharsets.UTF_8), clock.millis() + 10));
+        }
+        clock.advanceMillis(11);
+        return observed;
     }
 
     private ExpiryCycle cycle(Duration budget) {

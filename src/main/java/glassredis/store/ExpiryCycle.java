@@ -1,5 +1,9 @@
 package glassredis.store;
 
+import glassredis.observe.Event;
+import glassredis.observe.Event.RemovalReason;
+import glassredis.observe.EventBus;
+
 import java.time.Duration;
 import java.util.Objects;
 import java.util.random.RandomGenerator;
@@ -39,34 +43,55 @@ public final class ExpiryCycle {
     private final Keyspace keyspace;
     private final RandomGenerator random;
     private final long timeBudgetNanos;
+    private final EventBus events;
 
     public ExpiryCycle(Keyspace keyspace, RandomGenerator random, Duration timeBudget) {
+        this(keyspace, random, timeBudget, EventBus.NONE);
+    }
+
+    public ExpiryCycle(Keyspace keyspace, RandomGenerator random, Duration timeBudget, EventBus events) {
         this.keyspace = Objects.requireNonNull(keyspace, "keyspace");
         this.random = Objects.requireNonNull(random, "random");
         this.timeBudgetNanos = timeBudget.toNanos();
+        this.events = Objects.requireNonNull(events, "events");
     }
 
     /** @return 이번에 지운 키의 수 */
     public int run() {
         // 제한 시간은 키스페이스의 시계가 아니라 단조 시계로 잰다. 벽시계는 NTP 보정 등으로 뒤로 갈 수도 있다.
-        long deadline = System.nanoTime() + timeBudgetNanos;
+        long start = System.nanoTime();
+        long deadline = start + timeBudgetNanos;
+        int rounds = 0;
+        int totalSampled = 0;
         int totalExpired = 0;
 
         while (true) {
             int sampled = 0;
             int expired = 0;
             while (sampled < SAMPLE_SIZE && keyspace.expiringKeyCount() > 0) {
-                if (keyspace.expireIfDue(keyspace.randomExpiringKey(random))) {
+                if (keyspace.expireIfDue(keyspace.randomExpiringKey(random), RemovalReason.ACTIVE_EXPIRED)) {
                     expired++;
                 }
                 sampled++;
             }
+            rounds++;
+            totalSampled += sampled;
             totalExpired += expired;
 
             boolean fewExpired = expired * 100 <= sampled * REPEAT_THRESHOLD_PERCENT;
-            if (sampled == 0 || fewExpired || System.nanoTime() >= deadline) {
+            long now = System.nanoTime();
+            if (sampled == 0 || fewExpired || now >= deadline) {
+                publishCompletion(rounds, totalSampled, totalExpired, now - start);
                 return totalExpired;
             }
+        }
+    }
+
+    private void publishCompletion(int rounds, int sampled, int expired, long durationNanos) {
+        // 뽑을 키가 하나도 없어서 아무 일도 하지 않은 주기는 알리지 않는다.
+        // 100ms 마다 "할 일 없음"을 보내봐야 화면에 그릴 것은 없고 버퍼만 밀려난다.
+        if (sampled > 0 && events.enabled()) {
+            events.publish(new Event.ExpiryCycleCompleted(rounds, sampled, expired, durationNanos));
         }
     }
 }

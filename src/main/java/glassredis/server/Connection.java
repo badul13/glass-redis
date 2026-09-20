@@ -3,6 +3,8 @@ package glassredis.server;
 import glassredis.command.Command;
 import glassredis.command.CommandRegistry;
 import glassredis.command.Errors;
+import glassredis.observe.Event;
+import glassredis.observe.EventBus;
 import glassredis.resp.RespProtocolException;
 import glassredis.resp.RespReader;
 import glassredis.resp.RespValue;
@@ -33,17 +35,22 @@ final class Connection implements Runnable {
     private final CommandRegistry registry;
     private final CommandLoop commandLoop;
     private final long id;
+    private final EventBus events;
 
-    Connection(Socket socket, CommandRegistry registry, CommandLoop commandLoop, long id) {
+    Connection(Socket socket, CommandRegistry registry, CommandLoop commandLoop, long id, EventBus events) {
         this.socket = socket;
         this.registry = registry;
         this.commandLoop = commandLoop;
         this.id = id;
+        this.events = events;
     }
 
     @Override
     public void run() {
         String peer = String.valueOf(socket.getRemoteSocketAddress());
+        if (events.enabled()) {
+            events.publish(new Event.ClientConnected(id, peer));
+        }
         try (Socket open = socket) {
             // Nagle 알고리즘은 작은 패킷을 모았다가 보낸다. 처리량에는 도움이 되지만
             // 요청-응답을 주고받는 구조에서는 응답이 최대 수십 ms 지연될 수 있어서 끈다.
@@ -55,6 +62,12 @@ final class Connection implements Runnable {
         } catch (IOException e) {
             // 클라이언트가 갑자기 끊는 건 흔한 일이라 경고로 남기지 않는다.
             log("커넥션 %d (%s) 입출력 종료: %s", id, peer, e.getMessage());
+        } finally {
+            // 어떤 경로로 빠져나가든(정상 종료, 오류, 서버 종료로 인한 인터럽트) 한 번은 알린다.
+            // 대시보드의 접속 목록에 유령이 남지 않으려면 이 자리가 finally 여야 한다.
+            if (events.enabled()) {
+                events.publish(new Event.ClientDisconnected(id));
+            }
         }
     }
 
@@ -91,7 +104,7 @@ final class Connection implements Runnable {
                 // 응답을 받기 전에는 다음 명령을 읽지 않으므로, 파이프라이닝으로 몰아 보낸 명령도
                 // 보낸 순서대로 실행되고 응답도 그 순서로 나간다.
                 try {
-                    reply = commandLoop.submit(command, argv.subList(1, argv.size())).get();
+                    reply = commandLoop.submit(command, argv.subList(1, argv.size()), id).get();
                 } catch (InterruptedException e) {
                     // 서버가 종료하면서 커넥션 스레드를 깨웠다.
                     Thread.currentThread().interrupt();
