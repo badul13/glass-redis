@@ -2,6 +2,8 @@
 
 Redis 서버를 Java로 직접 구현하고, **내부에서 벌어지는 일을 실시간으로 들여다보는** 프로젝트.
 
+![대시보드](docs/dashboard.gif)
+
 ## 현재 상태
 
 - 문자열 명령어와 만료 20개(`SET` `GET` `DEL` `INCR` `EXPIRE` `TTL` …), `redis-cli` 로 그대로 접속
