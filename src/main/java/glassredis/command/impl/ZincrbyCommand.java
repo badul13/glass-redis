@@ -40,7 +40,7 @@ public final class ZincrbyCommand implements Command {
         Entry entry = keyspace.get(key);
         SortedSetValue zset;
         if (entry == null) {
-            zset = new SortedSetValue();
+            zset = SortedSetValue.create(1, args.get(2).length);
         } else if (entry.value() instanceof SortedSetValue existing) {
             zset = existing;
         } else {

@@ -41,7 +41,7 @@ public final class SkipList {
     /** 노드 하나. 멤버와 점수는 들어간 뒤로 바뀌지 않는다 — 점수를 바꾸려면 지웠다가 다시 넣는다. */
     public static final class Node {
         private final byte[] member;
-        private final double score;
+        private double score;
         private final Node[] forward;
         private final long[] span;
         private Node backward;
@@ -70,6 +70,21 @@ public final class SkipList {
         public Node previous() {
             return backward;
         }
+
+        /** 이 노드가 올라가 있는 층수. */
+        public int level() {
+            return forward.length;
+        }
+
+        /**
+         * {@code i} 층 화살표가 건너뛰는 노드 수. 그 층에서 이 노드가 끝이면(화살표가 nil 을 가리키면) -1.
+         *
+         * <p>nil 을 가리키는 화살표에도 span 값은 들어 있지만 의미가 없다. 순위를 셀 때
+         * nil 쪽으로는 건너가지 않기 때문이다. 화면에 헷갈리는 숫자를 내보내지 않으려고 -1 로 가린다.
+         */
+        public long span(int i) {
+            return forward[i] == null ? -1 : span[i];
+        }
     }
 
     /** 원소를 담지 않는 머리 노드. 모든 층의 출발점이다. */
@@ -88,6 +103,11 @@ public final class SkipList {
 
     public Node last() {
         return tail;
+    }
+
+    /** 머리 노드의 {@code i} 층 화살표가 건너뛰는 노드 수. 규칙은 {@link Node#span} 과 같다. */
+    public long headerSpan(int i) {
+        return header.span(i);
     }
 
     /**
@@ -157,7 +177,12 @@ public final class SkipList {
         if (x == null || x.score != score || !Arrays.equals(x.member, member)) {
             return false;
         }
+        deleteNode(x, update);
+        return true;
+    }
 
+    /** update[i] 는 i 층에서 x 바로 앞의 노드다(zslDeleteNode). */
+    private void deleteNode(Node x, Node[] update) {
         for (int i = 0; i < level; i++) {
             if (update[i].forward[i] == x) {
                 update[i].span[i] += x.span[i] - 1;
@@ -175,7 +200,33 @@ public final class SkipList {
             level--;
         }
         length--;
-        return true;
+    }
+
+    /**
+     * 점수를 바꾼다(zslUpdateScore). 바뀐 점수로도 앞뒤 노드 사이에 그대로 있을 수 있으면 노드를 건드리지 않고
+     * 점수만 고친다 — 층수도 그대로다. 자리가 바뀌어야 하면 지우고 새로 넣는데, 이때 층수는 다시 뽑는다.
+     */
+    void updateScore(double currentScore, byte[] member, double newScore) {
+        Node[] update = new Node[MAX_LEVEL];
+        Node x = header;
+        for (int i = level - 1; i >= 0; i--) {
+            while (x.forward[i] != null && precedes(x.forward[i], currentScore, member)) {
+                x = x.forward[i];
+            }
+            update[i] = x;
+        }
+        x = x.forward[0];
+        if (x == null || !isAt(x, currentScore, member)) {
+            throw new IllegalStateException("점수를 바꿀 노드가 없습니다");
+        }
+        // 비교가 < 와 > 로 엄격하다. 점수가 이웃과 같아지면 멤버 순서까지 봐야 하니 그냥 다시 넣는다.
+        if ((x.backward == null || x.backward.score < newScore)
+                && (x.forward[0] == null || x.forward[0].score > newScore)) {
+            x.score = newScore;
+            return;
+        }
+        deleteNode(x, update);
+        insert(newScore, member);
     }
 
     /** 1부터 세는 순위. 없으면 0. 내려오면서 지나온 span 을 더한 게 순위다. */
@@ -240,8 +291,8 @@ public final class SkipList {
         return x != header && range.aboveMin(x.score) ? x : null;
     }
 
-    /** 지금 쓰고 있는 층수. 테스트가 구조를 들여다볼 때 쓴다. */
-    int level() {
+    /** 지금 쓰고 있는 층수. 가장 높은 노드의 층수와 같다. */
+    public int level() {
         return level;
     }
 

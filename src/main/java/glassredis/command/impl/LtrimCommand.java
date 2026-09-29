@@ -51,13 +51,8 @@ public final class LtrimCommand implements Command {
             ctx.keyspace().remove(key);
             return RespValue.OK;
         }
-        int dropTail = list.size() - 1 - range.end();
-        for (int i = 0; i < range.start(); i++) {
-            list.elements().pollFirst();
-        }
-        for (int i = 0; i < dropTail; i++) {
-            list.elements().pollLast();
-        }
+        list.trim(range.start(), list.length() - 1 - range.end());
+        list.afterShrink();
         return RespValue.OK;
     }
 }

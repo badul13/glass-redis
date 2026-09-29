@@ -65,7 +65,7 @@ public final class HgetCommand implements Command {
     }
 
     private static RespValue lookup(HashValue hash, byte[] field) {
-        byte[] value = hash == null ? null : hash.fields().get(new Key(field));
+        byte[] value = hash == null ? null : hash.get(new Key(field));
         return value == null ? RespValue.NIL : new RespValue.BulkString(value);
     }
 }

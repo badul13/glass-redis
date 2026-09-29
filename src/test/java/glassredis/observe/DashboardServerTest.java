@@ -11,6 +11,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -30,16 +31,26 @@ import static org.junit.jupiter.api.Assertions.fail;
 class DashboardServerTest {
 
     private static final KeyspaceSnapshot SNAPSHOT = new KeyspaceSnapshot(1, 1,
-            List.of(new KeyspaceSnapshot.KeyView("k", "string", 3, 500L)));
+            List.of(new KeyspaceSnapshot.KeyView("k", "string", "embstr", 3, 500L)));
+
+    private static final SortedSetSnapshot SORTED_SET = new SortedSetSnapshot(
+            "한글", "ok", "skiplist", 1, 0, 1, List.of(1L),
+            List.of(new SortedSetSnapshot.NodeView("a", 1.5, List.of(-1L))));
 
     private final EventHub hub = new EventHub();
+
+    /** 스킵 리스트를 부탁받은 키. 브라우저가 보낸 쿼리가 제대로 풀렸는지 본다. */
+    private volatile String requestedKey;
     private DashboardServer dashboard;
     private HttpClient client;
 
     @BeforeEach
     void startDashboard() throws IOException {
         // 포트 0 을 주면 OS 가 비어 있는 포트를 골라준다.
-        dashboard = new DashboardServer("127.0.0.1", 0, hub, () -> SNAPSHOT);
+        dashboard = new DashboardServer("127.0.0.1", 0, hub, () -> SNAPSHOT, key -> {
+            requestedKey = new String(key, StandardCharsets.UTF_8);
+            return SORTED_SET;
+        });
         dashboard.start();
         client = HttpClient.newHttpClient();
     }
@@ -61,7 +72,7 @@ class DashboardServerTest {
 
         Iterator<String> lines = response.body().iterator();
         assertEquals("event: keyspace", nextEventLine(lines));
-        assertEquals("data: {\"total\":1,\"expiring\":1,\"keys\":[{\"key\":\"k\",\"type\":\"string\",\"size\":3,\"ttl\":500}]}",
+        assertEquals("data: {\"total\":1,\"expiring\":1,\"keys\":[{\"key\":\"k\",\"type\":\"string\",\"encoding\":\"embstr\",\"size\":3,\"ttl\":500}]}",
                 lines.next());
 
         awaitScreenCount(1);
@@ -86,10 +97,36 @@ class DashboardServerTest {
     }
 
     @Test
+    @DisplayName("스킵 리스트 스트림은 쿼리의 키를 UTF-8 로 풀어서 그 모양을 보낸다")
+    void streamsSortedSetOfRequestedKey() throws Exception {
+        String url = "http://127.0.0.1:" + dashboard.port() + "/api/zset?key=%ED%95%9C%EA%B8%80";
+        HttpResponse<Stream<String>> response = client.send(
+                HttpRequest.newBuilder(URI.create(url)).build(), HttpResponse.BodyHandlers.ofLines());
+
+        Iterator<String> lines = response.body().iterator();
+        assertEquals("event: zset", nextEventLine(lines));
+        assertEquals("data: {\"key\":\"한글\",\"status\":\"ok\",\"encoding\":\"skiplist\",\"length\":1,\"bytes\":0,\"level\":1,\"header\":[1],"
+                + "\"nodes\":[{\"member\":\"a\",\"score\":1.5,\"spans\":[-1]}]}", lines.next());
+        assertEquals("한글", requestedKey);
+        response.body().close();
+    }
+
+    @Test
+    @DisplayName("키 없이 스킵 리스트를 달라고 하면 400 이다")
+    void skipListNeedsKey() throws Exception {
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + dashboard.port() + "/api/zset")).build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(400, response.statusCode());
+    }
+
+    @Test
     @DisplayName("대시보드를 빌드하지 않았으면 빌드하는 법을 안내한다")
     void explainsHowToBuildTheDashboard() throws Exception {
         // 빌드가 끝난 환경에서는 진짜 대시보드가 클래스패스에 있다. 비어 있는 곳을 보게 해 빌드 전 상태를 만든다.
-        try (DashboardServer unbuilt = new DashboardServer("127.0.0.1", 0, hub, () -> SNAPSHOT, "nowhere/")) {
+        try (DashboardServer unbuilt = new DashboardServer(
+                "127.0.0.1", 0, hub, () -> SNAPSHOT, key -> SORTED_SET, "nowhere/")) {
             unbuilt.start();
             HttpResponse<String> response = client.send(
                     HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + unbuilt.port() + "/")).build(),

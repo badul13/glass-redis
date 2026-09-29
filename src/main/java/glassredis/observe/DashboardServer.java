@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -44,6 +46,9 @@ public final class DashboardServer implements AutoCloseable {
     /** 이벤트를 모아 보내는 주기. 초당 10번이면 사람 눈에는 실시간이고, 브라우저는 충분히 따라온다. */
     private static final Duration TICK = Duration.ofMillis(100);
 
+    /** 스킵 리스트 그림을 다시 뜨는 주기. 명령 하나에 구조가 바뀌는 게 바로 보일 만큼 짧게 잡는다. */
+    private static final Duration SORTED_SET_PERIOD = Duration.ofMillis(200);
+
     /** 키 목록을 다시 뜨는 주기. 남은 TTL 이 줄어드는 게 보일 정도면 된다. */
     private static final long SNAPSHOT_PERIOD_MILLIS = 500;
 
@@ -70,23 +75,29 @@ public final class DashboardServer implements AutoCloseable {
     /** 키 목록을 떠 오는 통로. 실행 스레드에 부탁하는 일은 서버 쪽이 알아서 한다. */
     private final Supplier<KeyspaceSnapshot> keyspace;
 
+    /** Sorted Set 하나의 스킵 리스트를 떠 오는 통로. 키 목록과 마찬가지로 실행 스레드에서 뜬다. */
+    private final Function<byte[], SortedSetSnapshot> sortedSet;
+
     private final String staticRoot;
 
     private HttpServer http;
     private ExecutorService handlers;
     private volatile boolean running;
 
-    public DashboardServer(String bindAddress, int port, EventHub hub, Supplier<KeyspaceSnapshot> keyspace) {
-        this(bindAddress, port, hub, keyspace, STATIC_ROOT);
+    public DashboardServer(String bindAddress, int port, EventHub hub, Supplier<KeyspaceSnapshot> keyspace,
+                           Function<byte[], SortedSetSnapshot> sortedSet) {
+        this(bindAddress, port, hub, keyspace, sortedSet, STATIC_ROOT);
     }
 
     /** 정적 파일을 다른 데서 찾게 한다. 대시보드를 빌드하지 않은 상태를 테스트할 때만 쓴다. */
     DashboardServer(String bindAddress, int port, EventHub hub, Supplier<KeyspaceSnapshot> keyspace,
+                    Function<byte[], SortedSetSnapshot> sortedSet,
                     String staticRoot) {
         this.bindAddress = bindAddress;
         this.requestedPort = port;
         this.hub = hub;
         this.keyspace = keyspace;
+        this.sortedSet = sortedSet;
         this.staticRoot = staticRoot;
     }
 
@@ -96,6 +107,7 @@ public final class DashboardServer implements AutoCloseable {
         handlers = Executors.newVirtualThreadPerTaskExecutor();
         http.setExecutor(handlers);
         http.createContext("/api/stream", this::handleStream);
+        http.createContext("/api/zset", this::handleSortedSet);
         http.createContext("/", this::handleStatic);
         running = true;
         http.start();
@@ -164,6 +176,62 @@ public final class DashboardServer implements AutoCloseable {
             }
             body.flush();
         }
+    }
+
+    /**
+     * {@code /api/zset?key=이름} — Sorted Set 하나의 스킵 리스트 모양을 흘려보낸다.
+     *
+     * <p>키 목록과 달리 이건 화면에서 키를 골랐을 때만 필요하다. 그래서 {@code /api/stream} 에 싣지 않고
+     * 따로 연다. 다른 키를 고르면 브라우저가 이 연결을 닫고 새로 연다.
+     *
+     * <p>주기마다 떠 보되, 모양이 바뀌었을 때만 보낸다. 가만히 있는 순위표를 초당 다섯 번 다시 보낼 이유가 없다.
+     */
+    private void handleSortedSet(HttpExchange exchange) throws IOException {
+        byte[] key = queryParameter(exchange, "key");
+        if (key == null) {
+            exchange.sendResponseHeaders(400, -1);
+            exchange.close();
+            return;
+        }
+        exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().add("Cache-Control", "no-cache");
+        exchange.sendResponseHeaders(200, 0);
+
+        try (OutputStream body = exchange.getResponseBody()) {
+            String last = null;
+            while (running) {
+                SortedSetSnapshot snapshot = sortedSet.apply(key);
+                if (snapshot != null) {
+                    String json = DashboardJson.sortedSet(snapshot);
+                    if (!json.equals(last)) {
+                        send(body, "zset", json);
+                        body.flush();
+                        last = json;
+                    }
+                }
+                Thread.sleep(SORTED_SET_PERIOD);
+            }
+        } catch (IOException closed) {
+            // 다른 키를 골랐거나 탭을 닫았다. 정상 종료다.
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 쿼리 문자열에서 값 하나를 UTF-8 바이트로 꺼낸다. 없으면 {@code null}. */
+    private static byte[] queryParameter(HttpExchange exchange, String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null) {
+            return null;
+        }
+        for (String pair : query.split("&")) {
+            int equals = pair.indexOf('=');
+            if (equals > 0 && pair.substring(0, equals).equals(name)) {
+                return URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8)
+                        .getBytes(StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     /**

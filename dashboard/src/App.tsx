@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { CommandStream } from './components/CommandStream'
 import { ExpiryPanel } from './components/ExpiryPanel'
 import { KeyspaceView } from './components/KeyspaceView'
+import { SortedSetView } from './components/SortedSetView'
 import { useEventStream } from './useEventStream'
+import { useSortedSet } from './useSortedSet'
 
 const STATUS_LABELS = {
   connecting: '연결 중',
@@ -11,6 +14,9 @@ const STATUS_LABELS = {
 
 export default function App() {
   const dashboard = useEventStream()
+  // 키 목록에서 고른 Sorted Set. 고르면 아래에 스킵 리스트 패널이 열린다.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const sortedSet = useSortedSet(selectedKey)
 
   return (
     <div className="app">
@@ -30,10 +36,12 @@ export default function App() {
       <main className="grid">
         <CommandStream rows={dashboard.rows} />
         <div className="side">
-          <KeyspaceView snapshot={dashboard.keyspace} />
+          <KeyspaceView snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
           <ExpiryPanel {...dashboard} />
         </div>
       </main>
+
+      {selectedKey !== null && <SortedSetView state={sortedSet} onClose={() => setSelectedKey(null)} />}
     </div>
   )
 }

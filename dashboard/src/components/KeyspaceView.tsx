@@ -7,7 +7,15 @@ import { bytes, millis } from '../format'
  * <p>만료 시각이 지났는데 아직 지워지지 않은 키를 숨기지 않는 것이 요점이다.
  * 그 줄이 화면에 남아 있다가 샘플링에 걸려 사라지는 게 이 프로젝트가 보여주려는 장면이다.
  */
-export function KeyspaceView({ snapshot }: { snapshot: KeyspaceSnapshot | null }) {
+export function KeyspaceView({
+  snapshot,
+  selectedKey,
+  onSelect,
+}: {
+  snapshot: KeyspaceSnapshot | null
+  selectedKey: string | null
+  onSelect: (key: string) => void
+}) {
   const keys = snapshot?.keys ?? []
   const hidden = snapshot ? snapshot.total - keys.length : 0
 
@@ -16,7 +24,7 @@ export function KeyspaceView({ snapshot }: { snapshot: KeyspaceSnapshot | null }
       <header className="panel-head">
         <h2>키스페이스</h2>
         <span className="hint">
-          {snapshot ? snapshot.total : 0}개 · 만료 대상 {snapshot ? snapshot.expiring : 0}개
+          {snapshot ? snapshot.total : 0}개 · 만료 대상 {snapshot ? snapshot.expiring : 0}개 · zset 클릭 시 구조 표시
         </span>
       </header>
 
@@ -29,9 +37,19 @@ export function KeyspaceView({ snapshot }: { snapshot: KeyspaceSnapshot | null }
           <tbody>
             {keys.map((key) => {
               const stale = key.ttl !== null && key.ttl <= 0
+              // 구조를 그릴 수 있는 건 지금은 Sorted Set 뿐이다.
+              const selectable = key.type === 'zset'
+              const classes = [stale && 'stale', selectable && 'selectable', key.key === selectedKey && 'selected']
               return (
-                <tr key={key.key} className={stale ? 'stale' : undefined}>
-                  <td className="type"><span className={'type-' + key.type}>{key.type}</span></td>
+                <tr
+                  key={key.key}
+                  className={classes.filter(Boolean).join(' ') || undefined}
+                  onClick={selectable ? () => onSelect(key.key) : undefined}
+                >
+                  <td className="type">
+                    <span className={'type-' + key.type}>{key.type}</span>
+                    <span className="encoding">{key.encoding}</span>
+                  </td>
                   <td className="key">{key.key}</td>
                   <td className="size">{key.type === 'string' ? bytes(key.size) : key.size + '개'}</td>
                   <td className="ttl">

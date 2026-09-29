@@ -48,12 +48,52 @@ final class DashboardJson {
             out.append('{');
             Json.field(out, "key", key.key());
             Json.field(out, "type", key.type());
+            Json.field(out, "encoding", key.encoding());
             Json.field(out, "size", key.size());
             Json.field(out, "ttl", key.ttlMillis());
             out.append('}');
         }
         out.append("]}");
         return out.toString();
+    }
+
+    static String sortedSet(SortedSetSnapshot snapshot) {
+        StringBuilder out = new StringBuilder(snapshot.nodes().size() * 64 + 64);
+        out.append('{');
+        Json.field(out, "key", snapshot.key());
+        Json.field(out, "status", snapshot.status());
+        Json.field(out, "encoding", snapshot.encoding());
+        Json.field(out, "length", snapshot.length());
+        Json.field(out, "bytes", snapshot.bytes());
+        Json.field(out, "level", snapshot.level());
+        Json.name(out, "header");
+        appendNumbers(out, snapshot.header());
+        Json.name(out, "nodes");
+        out.append('[');
+        for (SortedSetSnapshot.NodeView node : snapshot.nodes()) {
+            if (out.charAt(out.length() - 1) != '[') {
+                out.append(',');
+            }
+            out.append('{');
+            Json.field(out, "member", node.member());
+            Json.field(out, "score", node.score());
+            Json.name(out, "spans");
+            appendNumbers(out, node.spans());
+            out.append('}');
+        }
+        out.append("]}");
+        return out.toString();
+    }
+
+    private static void appendNumbers(StringBuilder out, List<Long> numbers) {
+        out.append('[');
+        for (int i = 0; i < numbers.size(); i++) {
+            if (i > 0) {
+                out.append(',');
+            }
+            out.append(numbers.get(i));
+        }
+        out.append(']');
     }
 
     private static void append(StringBuilder out, EventRecord record) {

@@ -3,6 +3,8 @@ package glassredis.server;
 import glassredis.command.CommandRegistry;
 import glassredis.observe.EventBus;
 import glassredis.observe.KeyspaceSnapshot;
+import glassredis.observe.SortedSetSnapshot;
+import glassredis.store.Key;
 import glassredis.store.Keyspace;
 
 import java.io.IOException;
@@ -16,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 
 /**
  * 리스닝 소켓을 열고 들어오는 커넥션을 받아 가상 스레드에 넘긴다.
@@ -81,8 +84,17 @@ public final class RedisServer implements AutoCloseable {
      * 대시보드는 이번 차례를 건너뛰면 그만이고, 화면 하나 때문에 종료가 늦어질 이유는 없다.
      */
     public KeyspaceSnapshot keyspaceSnapshot() {
+        return inspect(keyspace -> KeyspaceSnapshot.of(keyspace, KeyspaceSnapshot.DEFAULT_MAX_KEYS));
+    }
+
+    /** 대시보드가 그릴 Sorted Set 하나의 스킵 리스트. 받아 오는 방식은 {@link #keyspaceSnapshot()} 과 같다. */
+    public SortedSetSnapshot sortedSetSnapshot(byte[] key) {
+        return inspect(keyspace -> SortedSetSnapshot.of(keyspace, new Key(key), SortedSetSnapshot.DEFAULT_MAX_NODES));
+    }
+
+    private <T> T inspect(Function<Keyspace, T> reader) {
         try {
-            return commandLoop.snapshot(KeyspaceSnapshot.DEFAULT_MAX_KEYS).get(1, TimeUnit.SECONDS);
+            return commandLoop.inspect(reader).get(1, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;

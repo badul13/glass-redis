@@ -51,7 +51,7 @@ public final class HincrbyCommand implements Command {
 
         Key field = new Key(args.get(1));
         long current = 0;
-        byte[] stored = hash.fields().get(field);
+        byte[] stored = hash.get(field);
         if (stored != null) {
             OptionalLong parsed = Numbers.parseLong(stored);
             if (parsed.isEmpty()) {
@@ -67,7 +67,7 @@ public final class HincrbyCommand implements Command {
             return Errors.incrementOverflow();
         }
 
-        hash.fields().put(field, Numbers.toBytes(updated));
+        hash.set(field, Numbers.toBytes(updated));
         // 에러로 끝날 수 있는 검사를 다 지난 뒤에야 새 키를 넣는다. 먼저 넣으면 실패했을 때 빈 Hash 가 남는다.
         if (entry == null) {
             keyspace.put(key, Entry.of(hash));

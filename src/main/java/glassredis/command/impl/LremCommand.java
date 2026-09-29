@@ -9,8 +9,6 @@ import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ListValue;
 
-import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
 import java.util.OptionalLong;
 
@@ -53,17 +51,12 @@ public final class LremCommand implements Command {
 
         // Long.MIN_VALUE 는 부호를 뒤집을 수 없지만, 그만큼 지울 원소도 없으니 "제한 없음"으로 봐도 같다.
         long limit = count == 0 || count == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(count);
-        Iterator<byte[]> it = count < 0 ? list.elements().descendingIterator() : list.elements().iterator();
-        long removed = 0;
-        while (removed < limit && it.hasNext()) {
-            if (Arrays.equals(it.next(), target)) {
-                it.remove();
-                removed++;
-            }
-        }
+        long removed = list.remove(target, limit, count < 0);
 
-        if (list.size() == 0) {
+        if (list.length() == 0) {
             ctx.keyspace().remove(key);
+        } else if (removed > 0) {
+            list.afterShrink();
         }
         return new RespValue.Int(removed);
     }

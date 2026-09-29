@@ -63,6 +63,21 @@ final class Json {
         out.append(value == null ? "null" : value.toString());
     }
 
+    /**
+     * 실수. JSON 에는 무한대가 없어서 {@code "inf"}, {@code "-inf"} 문자열로 쓴다.
+     * Redis 가 응답에 쓰는 표기와 같게 맞췄다. NaN 은 점수로 들어올 수 없으므로 다루지 않는다.
+     */
+    static void field(StringBuilder out, String name, double value) {
+        separate(out);
+        string(out, name);
+        out.append(':');
+        if (Double.isInfinite(value)) {
+            string(out, value > 0 ? "inf" : "-inf");
+        } else {
+            out.append(value);
+        }
+    }
+
     /** {@code "이름":} 까지만 쓴다. 뒤에 배열이나 객체가 이어질 때 쓴다. */
     static void name(StringBuilder out, String name) {
         separate(out);

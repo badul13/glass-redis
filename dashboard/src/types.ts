@@ -66,6 +66,8 @@ export type ValueType = 'string' | 'list' | 'hash' | 'set' | 'zset'
 export interface KeyView {
   key: string
   type: ValueType
+  /** OBJECT ENCODING 이 돌려주는 모양. 같은 자료형도 크기에 따라 바뀐다. */
+  encoding: string
   /** 문자열은 바이트 수, 모음은 원소 수. */
   size: number
   /** 만료까지 남은 ms. 만료 시각이 없으면 null, 이미 지났는데 아직 안 지워졌으면 음수. */
@@ -76,4 +78,28 @@ export interface KeyspaceSnapshot {
   total: number
   expiring: number
   keys: KeyView[]
+}
+
+/** JSON 에 무한대가 없어서 서버가 문자열로 보낸다. */
+export type Score = number | 'inf' | '-inf'
+
+export interface SortedSetMember {
+  member: string
+  score: Score
+  /** skiplist 일 때 층별로 건너뛰는 노드 수. 그 층에서 끝이면 -1. 길이가 곧 이 노드의 층수. listpack 이면 빈 배열. */
+  spans: number[]
+}
+
+export interface SortedSetSnapshot {
+  key: string
+  status: 'ok' | 'missing' | 'wrongType'
+  encoding: 'listpack' | 'skiplist' | ''
+  /** 전체 멤버 수. nodes 가 잘렸어도 전체를 센 것. */
+  length: number
+  /** listpack 이면 바이트 배열 전체 크기. skiplist 면 0. */
+  bytes: number
+  level: number
+  /** 머리 노드의 층별 span. */
+  header: number[]
+  nodes: SortedSetMember[]
 }

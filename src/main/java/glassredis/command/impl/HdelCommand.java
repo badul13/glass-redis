@@ -37,7 +37,7 @@ public final class HdelCommand implements Command {
 
         long removed = 0;
         for (int i = 1; i < args.size(); i++) {
-            if (hash.fields().remove(new Key(args.get(i))) != null) {
+            if (hash.delete(new Key(args.get(i)))) {
                 removed++;
             }
         }

@@ -30,6 +30,6 @@ public final class HexistsCommand implements Command {
         if (!(entry.value() instanceof HashValue hash)) {
             return Errors.wrongType();
         }
-        return new RespValue.Int(hash.fields().containsKey(new Key(args.get(1))) ? 1 : 0);
+        return new RespValue.Int(hash.contains(new Key(args.get(1))) ? 1 : 0);
     }
 }

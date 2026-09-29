@@ -60,13 +60,12 @@ public final class PushCommand implements Command {
             return Errors.wrongType();
         }
 
-        for (int i = 1; i < args.size(); i++) {
-            if (left) {
-                list.elements().addFirst(args.get(i));
-            } else {
-                list.elements().addLast(args.get(i));
-            }
+        List<byte[]> values = args.subList(1, args.size());
+        // 넣기 전에 한 번에 본다. 다 넣으면 listpack 이 8KB 를 넘을 것 같으면 먼저 quicklist 로 바꿔 둔다.
+        list.prepareForAppend(values);
+        for (byte[] value : values) {
+            list.push(value, left);
         }
-        return new RespValue.Int(list.size());
+        return new RespValue.Int(list.length());
     }
 }

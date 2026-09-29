@@ -43,9 +43,11 @@ public final class HsetCommand implements Command {
             return Errors.wrongType();
         }
 
+        // 넣기 전에 한 번에 본다. 쌍이 512개를 넘거나 64바이트를 넘는 게 있으면 먼저 hashtable 로 바꿔 둔다.
+        hash.prepareForSet(args.subList(1, args.size()));
         long created = 0;
         for (int i = 1; i < args.size(); i += 2) {
-            if (hash.fields().put(new Key(args.get(i)), args.get(i + 1)) == null) {
+            if (hash.set(new Key(args.get(i)), args.get(i + 1))) {
                 created++;
             }
         }

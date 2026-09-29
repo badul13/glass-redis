@@ -75,21 +75,19 @@ public final class PopCommand implements Command {
         RespValue reply;
         if (hasCount) {
             List<RespValue> popped = new ArrayList<>();
-            for (long i = 0; i < count && list.size() > 0; i++) {
-                popped.add(new RespValue.BulkString(pop(list)));
+            for (long i = 0; i < count && list.length() > 0; i++) {
+                popped.add(new RespValue.BulkString(list.pop(left)));
             }
             reply = new RespValue.Array(popped);
         } else {
-            reply = new RespValue.BulkString(pop(list));
+            reply = new RespValue.BulkString(list.pop(left));
         }
 
-        if (list.size() == 0) {
+        if (list.length() == 0) {
             ctx.keyspace().remove(key);
+        } else {
+            list.afterShrink();
         }
         return reply;
-    }
-
-    private byte[] pop(ListValue list) {
-        return left ? list.elements().pollFirst() : list.elements().pollLast();
     }
 }

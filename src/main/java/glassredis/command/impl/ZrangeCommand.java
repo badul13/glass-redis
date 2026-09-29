@@ -10,7 +10,6 @@ import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ScoreRange;
-import glassredis.store.SkipList;
 import glassredis.store.SortedSetValue;
 
 import java.nio.charset.StandardCharsets;
@@ -32,7 +31,7 @@ import java.util.OptionalLong;
  * <p>두 방식으로 구간을 잡는다.
  * <ul>
  *   <li><b>순위</b>(기본) — {@code start stop} 이 0부터 세는 순위다. 규칙은 {@link IndexRange} 와 같다.
- *       첫 노드를 span 으로 O(log n) 에 찾고, 거기서부터 1층을 따라 걷는다.</li>
+ *       skiplist 면 첫 노드를 span 으로 O(log n) 에 찾아 1층을 따라 걷고, listpack 이면 그 자리까지 훑는다.</li>
  *   <li><b>점수</b>({@code BYSCORE}) — {@code min max} 가 점수 구간이다. 표기는 {@link ScoreRanges}.
  *       {@code LIMIT} 으로 앞의 몇 개를 건너뛰고 몇 개만 받을 수 있다.</li>
  * </ul>
@@ -140,47 +139,45 @@ public final class ZrangeCommand implements Command {
             return Errors.wrongType();
         }
 
-        SkipList order = zset.order();
-        List<RespValue> items = new ArrayList<>();
+        // 두 방식 모두 결국 "순위 몇 번부터 몇 번까지"로 바꿔서 꺼낸다. 순위 구간을 걷는 방법은 인코딩마다 다르다.
+        long from;
+        long to;
         if (byScore) {
-            if (offset < 0) {
+            // 점수 구간의 양 끝을 오름차순 순위로 찾는다.
+            long first = zset.firstRankIn(scores);
+            long last = zset.lastRankIn(scores);
+            if (first == -1 || last == -1 || first > last || offset < 0) {
                 return RespValue.EMPTY_ARRAY;
             }
-            SkipList.Node node = reverse ? order.lastInRange(scores) : order.firstInRange(scores);
-            for (long skipped = 0; node != null && skipped < offset; skipped++) {
-                node = step(node, reverse);
-            }
+            // 거꾸로면 높은 점수부터 센 순위로 바꾼다.
+            long size = zset.size();
+            from = reverse ? size - 1 - last : first;
+            to = reverse ? size - 1 - first : last;
+            from += offset;
             // 음수 count 는 "제한 없음"이다.
-            for (long taken = 0; node != null && (count < 0 || taken < count); taken++) {
-                if (reverse ? !scores.aboveMin(node.score()) : !scores.belowMax(node.score())) {
-                    break;
-                }
-                add(items, node, withScores);
-                node = step(node, reverse);
+            if (count >= 0) {
+                to = Math.min(to, from + count - 1);
+            }
+            if (from > to) {
+                return RespValue.EMPTY_ARRAY;
             }
         } else {
             IndexRange ranks = IndexRange.of(start.getAsLong(), stop.getAsLong(), zset.size());
             if (ranks == null) {
                 return RespValue.EMPTY_ARRAY;
             }
-            // 스킵 리스트의 순위는 1부터 센다. 거꾸로면 뒤에서 start 번째가 출발점이다.
-            SkipList.Node node = order.byRank(reverse ? zset.size() - ranks.start() : ranks.start() + 1);
-            for (int i = 0; i < ranks.count(); i++) {
-                add(items, node, withScores);
-                node = step(node, reverse);
+            from = ranks.start();
+            to = ranks.end();
+        }
+
+        List<RespValue> items = new ArrayList<>();
+        boolean includeScores = withScores;
+        zset.forEachInRankRange(from, to, reverse, (member, score) -> {
+            items.add(new RespValue.BulkString(member));
+            if (includeScores) {
+                items.add(new RespValue.BulkString(Numbers.formatDouble(score)));
             }
-        }
+        });
         return new RespValue.Array(items);
-    }
-
-    private static SkipList.Node step(SkipList.Node node, boolean reverse) {
-        return reverse ? node.previous() : node.next();
-    }
-
-    private static void add(List<RespValue> items, SkipList.Node node, boolean withScores) {
-        items.add(new RespValue.BulkString(node.member()));
-        if (withScores) {
-            items.add(new RespValue.BulkString(Numbers.formatDouble(node.score())));
-        }
     }
 }

@@ -77,14 +77,14 @@ class DashboardJsonTest {
     @DisplayName("키 목록: 만료 시각이 없으면 null, 이미 지났는데 남아 있으면 음수")
     void serialisesSnapshot() {
         KeyspaceSnapshot snapshot = new KeyspaceSnapshot(3, 2, List.of(
-                new KeyView("forever", "string", 5, null),
-                new KeyView("live", "list", 3, 9_421L),
-                new KeyView("stale", "string", 8, -1_200L)));
+                new KeyView("forever", "string", "embstr", 5, null),
+                new KeyView("live", "list", "listpack", 3, 9_421L),
+                new KeyView("stale", "string", "embstr", 8, -1_200L)));
 
         assertEquals("{\"total\":3,\"expiring\":2,\"keys\":["
-                + "{\"key\":\"forever\",\"type\":\"string\",\"size\":5,\"ttl\":null},"
-                + "{\"key\":\"live\",\"type\":\"list\",\"size\":3,\"ttl\":9421},"
-                + "{\"key\":\"stale\",\"type\":\"string\",\"size\":8,\"ttl\":-1200}]}", DashboardJson.snapshot(snapshot));
+                + "{\"key\":\"forever\",\"type\":\"string\",\"encoding\":\"embstr\",\"size\":5,\"ttl\":null},"
+                + "{\"key\":\"live\",\"type\":\"list\",\"encoding\":\"listpack\",\"size\":3,\"ttl\":9421},"
+                + "{\"key\":\"stale\",\"type\":\"string\",\"encoding\":\"embstr\",\"size\":8,\"ttl\":-1200}]}", DashboardJson.snapshot(snapshot));
     }
 
     private static EventRecord record(long sequence, Event event) {

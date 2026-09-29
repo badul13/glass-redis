@@ -466,3 +466,217 @@ table.keys .expired {
   color: var(--active);
   font-variant-numeric: tabular-nums;
 }
+
+/* 키 목록에서 고를 수 있는 줄 */
+
+table.keys tr.selectable {
+  cursor: pointer;
+}
+
+table.keys tr.selectable:hover {
+  background: #1a2024;
+}
+
+table.keys tr.selected {
+  background: #221d14;
+}
+
+/* 스킵 리스트 */
+
+.zset-panel {
+  flex-shrink: 0;
+  max-height: 46vh;
+}
+
+.zset-key {
+  font-family: var(--mono);
+  font-weight: 400;
+  color: var(--active);
+}
+
+.zset-panel .panel-head .hint {
+  margin-left: auto;
+}
+
+.close {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--text);
+}
+
+.skiplist-caption {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.skiplist-caption .dim {
+  color: var(--faint);
+}
+
+.skiplist-canvas {
+  overflow: auto;
+  padding: 4px 0 8px;
+}
+
+.skiplist-svg {
+  display: block;
+  font-family: var(--mono);
+}
+
+.skiplist-svg .box {
+  fill: #1c2226;
+  stroke: #36424a;
+}
+
+.skiplist-svg .box.walked {
+  fill: #2d2416;
+  stroke: var(--active);
+}
+
+.skiplist-svg .box-label {
+  fill: var(--dim);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.skiplist-svg .arrow line {
+  stroke: #46545c;
+  stroke-width: 1.2;
+}
+
+.skiplist-svg .arrow-head {
+  fill: #46545c;
+}
+
+.skiplist-svg .arrow.walked line {
+  stroke: var(--active);
+  stroke-width: 2;
+}
+
+.skiplist-svg .arrow.nil line {
+  stroke: #2a3237;
+  stroke-dasharray: 3 3;
+}
+
+.skiplist-svg .span {
+  fill: var(--dim);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.skiplist-svg .arrow.walked .span {
+  fill: var(--active);
+  font-weight: 600;
+}
+
+.skiplist-svg .floor,
+.skiplist-svg .nil-label,
+.skiplist-svg .more {
+  fill: var(--faint);
+  font-size: 10px;
+}
+
+.skiplist-svg .member {
+  fill: var(--text);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.skiplist-svg .score {
+  fill: var(--faint);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.skiplist-svg .hit {
+  fill: transparent;
+}
+
+/* 새로 들어왔거나 점수가 바뀐 노드는 한 번 반짝인다. 순위표에서 자리를 옮긴 게 눈에 띄게. */
+.skiplist-svg .node.fresh .box {
+  animation: fresh 1.2s ease-out;
+}
+
+@keyframes fresh {
+  from {
+    fill: #7a5a24;
+    stroke: var(--active);
+  }
+}
+
+/* 키 목록의 인코딩 이름. 자료형 바로 뒤에 흐리게. */
+table.keys td.type .encoding {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+/* listpack — 바이트 배열 한 줄 */
+
+.listpack-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 14px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: max-content;
+}
+
+.lp-pair {
+  display: flex;
+}
+
+.lp-cell {
+  padding: 5px 8px;
+  border: 1px solid #36424a;
+  border-left: none;
+  background: #1c2226;
+  white-space: nowrap;
+}
+
+.lp-header {
+  border-left: 1px solid #36424a;
+  border-radius: 4px 0 0 4px;
+  color: var(--faint);
+}
+
+.lp-member {
+  color: var(--text);
+}
+
+.lp-score {
+  color: var(--dim);
+  background: #181d20;
+}
+
+.lp-more {
+  color: var(--faint);
+}
+
+.lp-end {
+  border-radius: 0 4px 4px 0;
+  color: var(--faint);
+}
+
+.lp-pair.fresh .lp-cell {
+  animation: fresh-cell 1.2s ease-out;
+}
+
+@keyframes fresh-cell {
+  from {
+    background: #7a5a24;
+  }
+}

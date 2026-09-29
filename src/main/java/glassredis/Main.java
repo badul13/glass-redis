@@ -80,7 +80,8 @@ public final class Main {
      * 서버를 내리지 않고 경고만 남긴 뒤 계속 간다.
      */
     private static DashboardServer startDashboard(String bind, int port, EventHub events, RedisServer server) {
-        DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot);
+        DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot,
+                server::sortedSetSnapshot);
         try {
             dashboard.start();
             System.out.printf("[glass-redis] 대시보드: http://%s:%d%n", bind, dashboard.port());

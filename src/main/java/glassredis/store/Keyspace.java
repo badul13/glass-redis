@@ -67,6 +67,16 @@ public final class Keyspace {
         return expireIfDue(key, RemovalReason.LAZY_EXPIRED) ? null : entries.get(key);
     }
 
+    /**
+     * 만료를 확인하지 않고 들여다본다. 대시보드가 키 하나를 자세히 볼 때 쓴다.
+     *
+     * <p>{@link #get} 을 쓰면 안 된다. 만료된 키를 들여다보는 순간 그 자리에서 지워버리므로,
+     * 화면이 보고만 있어도 서버 상태가 바뀐다. 관측이 관측 대상을 건드리면 안 된다.
+     */
+    public Entry peek(Key key) {
+        return entries.get(key);
+    }
+
     public void put(Key key, Entry entry) {
         entries.put(key, entry);
         if (entry.hasExpiry()) {

@@ -33,17 +33,19 @@ public final class SaddCommand implements Command {
 
         SetValue set;
         if (entry == null) {
-            set = new SetValue();
+            // 첫 원소와 넣을 개수로 처음 모양을 고른다. 정수로 시작하면 intset 이다.
+            set = SetValue.create(args.get(1), args.size() - 1);
             keyspace.put(key, Entry.of(set));
         } else if (entry.value() instanceof SetValue existing) {
             set = existing;
+            set.prepareForAdd(args.size() - 1);
         } else {
             return Errors.wrongType();
         }
 
         long added = 0;
         for (int i = 1; i < args.size(); i++) {
-            if (set.members().add(new Key(args.get(i)))) {
+            if (set.add(args.get(i))) {
                 added++;
             }
         }

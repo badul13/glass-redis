@@ -21,6 +21,7 @@ import glassredis.command.impl.LremCommand;
 import glassredis.command.impl.LtrimCommand;
 import glassredis.command.impl.MgetCommand;
 import glassredis.command.impl.MsetCommand;
+import glassredis.command.impl.ObjectCommand;
 import glassredis.command.impl.PersistCommand;
 import glassredis.command.impl.PingCommand;
 import glassredis.command.impl.PopCommand;
@@ -90,6 +91,7 @@ public final class CommandRegistry {
         registry.register(TtlCommand.milliseconds());
         registry.register(new PersistCommand());
         registry.register(new TypeCommand());
+        registry.register(new ObjectCommand());
 
         registry.register(PushCommand.left());
         registry.register(PushCommand.right());

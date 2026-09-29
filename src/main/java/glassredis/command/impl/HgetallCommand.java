@@ -10,13 +10,15 @@ import glassredis.store.Key;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * {@code HGETALL key} / {@code HKEYS key} / {@code HVALS key} — Hash 전체를 훑는다. 키가 없으면 빈 배열.
  *
  * <p>{@code HGETALL} 은 맵이 아니라 {@code [필드1, 값1, 필드2, 값2, ...]} 로 펼친 배열이다.
  * RESP2 에는 맵 타입이 없어서다. 짝을 맞춰 읽는 건 클라이언트 몫이다.
+ *
+ * <p>순서는 인코딩을 따른다. listpack 이면 넣은 순서, hashtable 이면 버킷 순서라 서버를 켤 때마다 달라진다
+ * (해시 씨앗이 매번 바뀐다). 실제 Redis 도 같다.
  */
 public final class HgetallCommand implements Command {
 
@@ -61,14 +63,14 @@ public final class HgetallCommand implements Command {
         }
 
         List<RespValue> items = new ArrayList<>(hash.size() * (withFields && withValues ? 2 : 1));
-        for (Map.Entry<Key, byte[]> field : hash.fields().entrySet()) {
+        hash.forEach((field, value) -> {
             if (withFields) {
-                items.add(new RespValue.BulkString(field.getKey().bytes()));
+                items.add(new RespValue.BulkString(field));
             }
             if (withValues) {
-                items.add(new RespValue.BulkString(field.getValue()));
+                items.add(new RespValue.BulkString(value));
             }
-        }
+        });
         return new RespValue.Array(items);
     }
 }

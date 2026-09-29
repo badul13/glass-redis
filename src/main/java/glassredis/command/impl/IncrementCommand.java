@@ -102,7 +102,7 @@ public final class IncrementCommand implements Command {
             return Errors.incrementOverflow();
         }
 
-        byte[] text = Numbers.toBytes(updated);
+        StringValue text = StringValue.ofLong(updated);
         keyspace.put(key, entry == null ? Entry.of(text) : entry.withValue(text));
         return new RespValue.Int(updated);
     }

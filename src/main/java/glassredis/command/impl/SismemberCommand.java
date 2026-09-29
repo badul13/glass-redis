@@ -10,7 +10,10 @@ import glassredis.store.SetValue;
 
 import java.util.List;
 
-/** {@code SISMEMBER key member} — 원소가 있으면 1, 없으면 0. 해시로 찾으므로 Set 이 아무리 커도 O(1) 이다. */
+/**
+ * {@code SISMEMBER key member} — 원소가 있으면 1, 없으면 0.
+ * hashtable 이면 O(1), intset 이면 이진 탐색 O(log n), listpack 이면 훑어서 O(n) 이다.
+ */
 public final class SismemberCommand implements Command {
 
     @Override
@@ -30,6 +33,6 @@ public final class SismemberCommand implements Command {
         if (!(entry.value() instanceof SetValue set)) {
             return Errors.wrongType();
         }
-        return new RespValue.Int(set.members().contains(new Key(args.get(1))) ? 1 : 0);
+        return new RespValue.Int(set.contains(args.get(1)) ? 1 : 0);
     }
 }

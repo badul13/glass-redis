@@ -31,7 +31,7 @@ public record Entry(Value value, long expireAtMillis) {
 
     /** 만료 시각이 없는 문자열. */
     public static Entry of(byte[] value) {
-        return of(new StringValue(value));
+        return of(StringValue.of(value));
     }
 
     public boolean hasExpiry() {
@@ -48,8 +48,8 @@ public record Entry(Value value, long expireAtMillis) {
     }
 
     /** 만료 시각은 그대로 두고 값만 바꾼다. INCR, APPEND 처럼 값을 고치는 명령은 만료 시각을 지우지 않는다. */
-    public Entry withValue(byte[] newValue) {
-        return new Entry(new StringValue(newValue), expireAtMillis);
+    public Entry withValue(Value newValue) {
+        return new Entry(newValue, expireAtMillis);
     }
 
     public Entry withExpireAt(long newExpireAtMillis) {

@@ -53,6 +53,12 @@ public final class Errors {
                 "ERR wrong number of arguments for '" + commandName.toLowerCase(Locale.ROOT) + "' command");
     }
 
+    /** {@code OBJECT FOO} 처럼 하위 명령을 모른다. 하위 명령은 받은 그대로 보여주고, 명령 이름은 대문자다. */
+    public static RespValue.Err unknownSubcommand(String subcommand, String commandName) {
+        return new RespValue.Err(newlinesToSpaces("ERR unknown subcommand '" + subcommand + "'. Try "
+                + commandName.toUpperCase(Locale.ROOT) + " HELP."));
+    }
+
     public static RespValue.Err syntaxError() {
         return new RespValue.Err("ERR syntax error");
     }

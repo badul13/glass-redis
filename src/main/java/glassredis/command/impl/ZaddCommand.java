@@ -95,9 +95,11 @@ public final class ZaddCommand implements Command {
             if (xx) {
                 return incr ? RespValue.NIL : new RespValue.Int(0);
             }
-            zset = new SortedSetValue();
+            // 넣을 개수와 첫 멤버의 길이만 보고 처음 모양을 고른다. 둘째 멤버부터는 넣을 때마다 따로 본다.
+            zset = SortedSetValue.create(scores.length, args.get(first + 1).length);
         } else if (entry.value() instanceof SortedSetValue existing) {
             zset = existing;
+            zset.prepareForAdd(scores.length);
         } else {
             return Errors.wrongType();
         }

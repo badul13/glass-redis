@@ -152,7 +152,7 @@ public final class SetCommand implements Command {
             expireAt = previous.expireAtMillis();
         }
         // EXAT/PXAT 로 이미 지난 시각을 줬다면 여기서 저장은 되지만, 다음에 읽는 순간 만료로 확인돼 없는 키로 보인다.
-        keyspace.put(key, new Entry(new StringValue(args.get(1)), expireAt));
+        keyspace.put(key, new Entry(StringValue.of(args.get(1)), expireAt));
         return get ? previousValue : RespValue.OK;
     }
 }

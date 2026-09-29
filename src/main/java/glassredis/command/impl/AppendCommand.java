@@ -53,7 +53,8 @@ public final class AppendCommand implements Command {
         }
         byte[] joined = Arrays.copyOf(current, (int) joinedLength);
         System.arraycopy(suffix, 0, joined, current.length, suffix.length);
-        ctx.keyspace().put(key, entry.withValue(joined));
+        // 고친 문자열은 길이와 상관없이 raw 가 된다. 실제 Redis 도 APPEND 한 값은 embstr 로 두지 않는다.
+        ctx.keyspace().put(key, entry.withValue(StringValue.raw(joined)));
         return new RespValue.Int(joinedLength);
     }
 }

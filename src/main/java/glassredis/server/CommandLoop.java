@@ -5,7 +5,6 @@ import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
-import glassredis.observe.KeyspaceSnapshot;
 import glassredis.resp.RespValue;
 import glassredis.store.ExpiryCycle;
 import glassredis.store.Keyspace;
@@ -19,6 +18,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 /**
  * 모든 명령을 스레드 하나에서 차례로 실행한다.
@@ -116,18 +116,20 @@ final class CommandLoop implements AutoCloseable {
     }
 
     /**
-     * 지금 이 순간의 키스페이스를 뜬다.
+     * 실행 스레드에서 키스페이스를 읽어 온다. 대시보드의 키 목록과 스킵 리스트 그림이 이걸로 뜬다.
      *
-     * <p>대시보드가 키 목록을 그리려면 키스페이스를 읽어야 하는데, 그건 실행 스레드만 할 수 있는 일이다.
+     * <p>화면을 그리려면 키스페이스를 읽어야 하는데, 그건 실행 스레드만 할 수 있는 일이다.
      * 그래서 HTTP 스레드가 직접 읽지 않고 여기에 작업을 맡긴다. 명령과 같은 큐에 줄을 서므로
      * 명령이 반쯤 실행된 중간 상태가 찍히는 일도 없다.
      *
      * <p>이걸 {@code KEYS} 같은 진짜 명령으로 만들지 않은 이유는, redis-cli 에 내보낼 것도 아니고
      * 응답이 RESP 여야 할 이유도 없어서다.
+     *
+     * @param reader 읽기만 해야 한다. 여기서 키스페이스를 고치면 명령을 거치지 않은 변경이 생긴다.
      */
-    CompletableFuture<KeyspaceSnapshot> snapshot(int maxKeys) {
-        CompletableFuture<KeyspaceSnapshot> result = new CompletableFuture<>();
-        queue.add(() -> result.complete(KeyspaceSnapshot.of(context.keyspace(), maxKeys)));
+    <T> CompletableFuture<T> inspect(Function<Keyspace, T> reader) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        queue.add(() -> result.complete(reader.apply(context.keyspace())));
         return result;
     }
 

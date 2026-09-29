@@ -15,6 +15,12 @@ public sealed interface Value permits StringValue, ListValue, HashValue, SetValu
     /** {@code TYPE} 명령이 돌려주는 이름. */
     String typeName();
 
+    /**
+     * 지금 담긴 모양. {@code OBJECT ENCODING} 이 돌려주는 이름이다. 같은 자료형도 크기에 따라 모양이 바뀐다 —
+     * 작을 때는 촘촘하게(listpack, intset, embstr), 커지면 빠르게(hashtable, skiplist, quicklist).
+     */
+    String encoding();
+
     /** 대시보드에 보여줄 크기. 문자열은 바이트 수, 모음은 원소 수다. */
     int size();
 }

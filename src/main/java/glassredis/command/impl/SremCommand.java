@@ -37,7 +37,7 @@ public final class SremCommand implements Command {
 
         long removed = 0;
         for (int i = 1; i < args.size(); i++) {
-            if (set.members().remove(new Key(args.get(i)))) {
+            if (set.remove(args.get(i))) {
                 removed++;
             }
         }
