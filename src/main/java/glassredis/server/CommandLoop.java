@@ -6,11 +6,10 @@ import glassredis.command.Errors;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.resp.RespValue;
-import glassredis.store.ExpiryCycle;
+import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
 
 import java.util.List;
-import java.util.SplittableRandom;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -31,10 +30,10 @@ import java.util.function.Function;
  *   커넥션 스레드 ─┐
  *   커넥션 스레드 ─┼─▶ 큐 ─▶ 실행 스레드 ─▶ Command.execute()
  *   커넥션 스레드 ─┤
- *   만료 타이머  ──┘  (100ms 마다 샘플링 작업을 넣음)
+ *   주기 타이머  ──┘  (100ms 마다 serverCron 작업을 넣음)
  * </pre>
  *
- * <p>이렇게 하면 데이터를 만지는 스레드가 하나로 고정된다. 락 없이 평범한 {@code HashMap} 을 써도 되고,
+ * <p>이렇게 하면 데이터를 만지는 스레드가 하나로 고정된다. 해시 테이블에 락이 하나도 없어도 되고,
  * "읽고, 고치고, 쓰는" 명령({@code INCR} 등)의 중간에 다른 명령이 끼어들 틈이 없다.
  * 실제 Redis 도 명령 실행은 스레드 하나에서 한다.
  *
@@ -46,12 +45,12 @@ import java.util.function.Function;
  */
 final class CommandLoop implements AutoCloseable {
 
-    /** 주기적 만료 샘플링을 1초에 몇 번 돌릴지. 실제 Redis 설정 {@code hz} 의 기본값과 같다. */
-    private static final int EXPIRY_HZ = 10;
+    /** 주기 작업을 1초에 몇 번 돌릴지. 실제 Redis 설정 {@code hz} 의 기본값과 같다. */
+    private static final int HZ = ActiveExpireCycle.HZ;
 
     /**
      * 크기 제한이 없는 큐를 쓴다. 제한이 없어도 무한정 쌓이지는 않는다 —
-     * 커넥션은 응답을 받기 전까지 다음 명령을 넣지 않고, 샘플링 작업은 한 번에 하나만 넣는다.
+     * 커넥션은 응답을 받기 전까지 다음 명령을 넣지 않고, 주기 작업은 한 번에 하나만 넣는다.
      * 그래서 큐에 동시에 들어 있는 작업은 많아야 "커넥션 수 + 1" 개다.
      */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
@@ -59,19 +58,19 @@ final class CommandLoop implements AutoCloseable {
     private final Thread thread = Thread.ofPlatform().name("glass-redis-executor").unstarted(this::runLoop);
 
     /**
-     * 샘플링 주기를 재는 타이머. 시간만 재고 샘플링 작업은 큐에 넣기만 한다.
+     * 주기 작업의 박자를 재는 타이머. 시간만 재고 작업은 큐에 넣기만 한다.
      * 타이머 스레드가 키스페이스를 직접 만지면 "실행 스레드만 만진다"는 전제가 깨진다.
      */
-    private final ScheduledExecutorService expiryTimer = Executors.newSingleThreadScheduledExecutor(
-            Thread.ofPlatform().name("glass-redis-expiry-timer").daemon(true).factory());
+    private final ScheduledExecutorService cronTimer = Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().name("glass-redis-cron-timer").daemon(true).factory());
 
-    /** 샘플링 작업이 이미 큐에서 기다리는 중인지. 실행 스레드가 밀려 있을 때 같은 작업이 줄줄이 쌓이지 않게 한다. */
-    private final AtomicBoolean expiryQueued = new AtomicBoolean();
+    /** 주기 작업이 이미 큐에서 기다리는 중인지. 실행 스레드가 밀려 있을 때 같은 작업이 줄줄이 쌓이지 않게 한다. */
+    private final AtomicBoolean cronQueued = new AtomicBoolean();
 
     /** 명령에 넘기는 서버 상태. 안에 든 키스페이스는 이 클래스의 실행 스레드만 만진다. */
     private final Context context;
 
-    private final ExpiryCycle expiryCycle;
+    private final ActiveExpireCycle activeExpire;
 
     /** 실행한 명령을 알릴 곳. 관측이 꺼져 있으면 시간을 재지도 않는다. */
     private final EventBus events;
@@ -87,17 +86,15 @@ final class CommandLoop implements AutoCloseable {
     CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
         this.context = new Context(keyspace);
         this.events = events;
-        // RandomGenerator.getDefault() 는 쓰지 않는다. 그 구현(L32X64MixRandom)은 jdk.random 모듈에 있어서,
-        // 모듈을 덜어낸 JRE 이미지에서는 서버가 시작하자마자 죽는다. SplittableRandom 은 java.base 에 있다.
-        this.expiryCycle = new ExpiryCycle(keyspace, new SplittableRandom(), ExpiryCycle.DEFAULT_TIME_BUDGET, events);
+        this.activeExpire = new ActiveExpireCycle(keyspace, events);
         this.onFatalError = onFatalError;
     }
 
     void start() {
         running = true;
         thread.start();
-        long periodMillis = 1000 / EXPIRY_HZ;
-        expiryTimer.scheduleAtFixedRate(this::requestExpiryCycle, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+        long periodMillis = 1000 / HZ;
+        cronTimer.scheduleAtFixedRate(this::requestCron, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -142,34 +139,51 @@ final class CommandLoop implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        expiryTimer.shutdownNow();
+        cronTimer.shutdownNow();
         // take() 에서 기다리는 중이라면 인터럽트로 깨운다.
         thread.interrupt();
     }
 
     /** 타이머 스레드에서 불린다. */
-    private void requestExpiryCycle() {
-        if (expiryQueued.compareAndSet(false, true)) {
+    private void requestCron() {
+        if (cronQueued.compareAndSet(false, true)) {
             queue.add(() -> {
-                expiryQueued.set(false);
-                expiryCycle.run();
+                cronQueued.set(false);
+                serverCron();
             });
         }
     }
 
+    /**
+     * 1초에 10번 도는 주기 작업. 실제 Redis 의 serverCron → databasesCron 중 키스페이스에 관한 부분이다.
+     * <ol>
+     *   <li>SLOW 주기적 만료 — 만료된 키 청소의 본체.</li>
+     *   <li>너무 비어 버린 해시 테이블 줄이기.</li>
+     *   <li>옮기는 중인 해시 테이블을 1ms 밀어주기. 옮기기는 원래 명령이 올 때마다 한 칸씩 하는데,
+     *       명령이 뜸하면 한없이 늘어지므로 여기서 거든다.</li>
+     * </ol>
+     */
+    private void serverCron() {
+        Keyspace keyspace = context.keyspace();
+        activeExpire.run(ActiveExpireCycle.Kind.SLOW);
+        keyspace.tryResizeHashTables();
+        keyspace.incrementallyRehash();
+    }
+
     private void runLoop() {
         while (running) {
-            Runnable task;
             try {
-                task = queue.take();
+                // 큐가 비었다 = 곧 잠든다. 실제 Redis 가 이벤트 루프에서 잠들기 직전(beforeSleep)에 FAST 만료를
+                // 돌리는 자리를 여기로 흉내 낸다. 할 일이 없어 보이면 FAST 는 스스로 바로 돌아온다.
+                if (queue.isEmpty()) {
+                    activeExpire.run(ActiveExpireCycle.Kind.FAST);
+                }
+                queue.take().run();
             } catch (InterruptedException e) {
                 return; // close() 가 깨웠다
-            }
-            try {
-                task.run();
             } catch (Throwable fatal) {
                 // 명령의 RuntimeException 은 execute() 가 이미 응답으로 바꿨다. 여기까지 오는 건 Error 이거나,
-                // 명령이 아닌 내부 작업(만료 샘플링)이 던진 예외다. 어느 쪽이든 JVM 이나 데이터 상태를 믿을 수 없다.
+                // 명령이 아닌 내부 작업(주기 작업, 만료 청소)이 던진 예외다. 어느 쪽이든 JVM 이나 데이터 상태를 믿을 수 없다.
                 //
                 // 그렇다고 이 스레드만 조용히 끝나면 더 나쁘다. 큐를 꺼낼 스레드가 없어져서
                 // 모든 클라이언트가 답을 영원히 기다리는데, 프로세스와 포트는 살아 있어 밖에서 알아채기 어렵다.

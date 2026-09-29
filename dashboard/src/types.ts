@@ -41,10 +41,17 @@ export interface KeyRemoved extends Stamped {
 
 export interface ExpiryCycleCompleted extends Stamped {
   type: 'expiryCycle'
+  /** SLOW: 서버 주기 작업(100ms 마다, 최대 25ms). FAST: 실행 큐가 비어 쉬기 직전(최대 1ms). */
+  kind: 'SLOW' | 'FAST'
+  /** 10% 규칙에 걸려 되풀이한 바퀴 수. */
   rounds: number
   sampled: number
   expired: number
   nanos: number
+  /** 시간 한도에 걸려 일을 남기고 끝났는지. */
+  timeLimitHit: boolean
+  /** 만료됐는데 아직 남아 있는 키의 비율 추정치(%). */
+  stalePercent: number
 }
 
 export type ActivityEvent =

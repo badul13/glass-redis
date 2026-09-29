@@ -395,6 +395,18 @@ table.keys .expired {
   border-radius: 1px;
 }
 
+.cycles .bar.fast {
+  background: #243241;
+}
+
+.cycles .bar.fast.hit {
+  background: var(--lazy);
+}
+
+.cycles .bar.limit {
+  outline: 1px solid var(--error);
+}
+
 .cycles .bar.hit {
   background: var(--active);
 }

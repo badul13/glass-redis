@@ -126,10 +126,13 @@ final class DashboardJson {
             }
             case Event.ExpiryCycleCompleted cycle -> {
                 Json.field(out, "type", "expiryCycle");
+                Json.field(out, "kind", cycle.kind());
                 Json.field(out, "rounds", cycle.rounds());
                 Json.field(out, "sampled", cycle.sampled());
                 Json.field(out, "expired", cycle.expired());
                 Json.field(out, "nanos", cycle.durationNanos());
+                Json.field(out, "timeLimitHit", cycle.timeLimitHit());
+                Json.field(out, "stalePercent", cycle.stalePercent());
             }
         }
         out.append('}');

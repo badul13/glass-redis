@@ -50,21 +50,25 @@ public sealed interface Event {
     }
 
     /**
-     * 주기적 만료 샘플링이 한 번 돌았다.
+     * 주기적 만료가 한 번 돌았다.
      *
-     * <p>뽑을 키가 하나도 없어서 아무 일도 하지 않은 주기는 발행하지 않는다. 100ms 마다 "할 일 없음"을
+     * <p>볼 키가 하나도 없어서 아무 일도 하지 않은 주기는 발행하지 않는다. 100ms 마다 "할 일 없음"을
      * 보내봐야 화면에 그릴 것이 없고 버퍼만 밀어낸다.
      *
-     * @param rounds 25% 규칙에 걸려 몇 바퀴를 돌았는지
+     * @param kind          {@code SLOW}(주기 작업, 최대 25ms) 또는 {@code FAST}(쉬기 직전, 최대 1ms)
+     * @param rounds        10% 규칙에 걸려 몇 바퀴를 돌았는지
+     * @param timeLimitHit  시간 한도에 걸려 일을 남기고 끝났는지
+     * @param stalePercent  만료됐는데 아직 남아 있는 키의 비율 추정치(%)
      */
-    record ExpiryCycleCompleted(int rounds, int sampled, int expired, long durationNanos) implements Event {
+    record ExpiryCycleCompleted(String kind, int rounds, int sampled, int expired, long durationNanos,
+                                boolean timeLimitHit, double stalePercent) implements Event {
     }
 
     /** 키가 사라진 이유. 같은 삭제라도 누가 지웠는지가 이 프로젝트에서 제일 보고 싶은 것이다. */
     enum RemovalReason {
         /** 읽을 때 만료가 확인돼서 그 자리에서 지웠다. */
         LAZY_EXPIRED,
-        /** 주기적 샘플링에 걸려서 지웠다. 아무도 읽지 않는 키는 이 경로로만 사라진다. */
+        /** 주기적 만료(SLOW·FAST)에 걸려서 지웠다. 아무도 읽지 않는 키는 이 경로로만 사라진다. */
         ACTIVE_EXPIRED,
         /** {@code DEL} 명령으로 지웠다. */
         DELETED

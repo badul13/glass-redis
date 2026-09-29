@@ -115,6 +115,61 @@ class DictTest {
     }
 
     @Test
+    @DisplayName("scan 은 0 에서 시작해 0 으로 돌아오기까지 모든 키를 한 번 이상 본다")
+    void scanVisitsEverything() {
+        Dict<Integer> dict = new Dict<>();
+        for (int i = 0; i < 500; i++) {
+            dict.add(Key.of("k" + i), i);
+        }
+        Set<String> seen = new HashSet<>();
+        long cursor = 0;
+        do {
+            cursor = dict.scan(cursor, (key, value) -> seen.add(new String(key.bytes())));
+        } while (cursor != 0);
+
+        assertEquals(500, seen.size());
+    }
+
+    @Test
+    @DisplayName("훑는 도중에 테이블이 커지고 옮겨져도 처음부터 있던 키는 빠뜨리지 않는다 — 커서를 거꾸로 세는 이유")
+    void scanSurvivesGrowth() {
+        Dict<Integer> dict = new Dict<>();
+        for (int i = 0; i < 100; i++) {
+            dict.add(Key.of("old" + i), i);
+        }
+        Set<String> seen = new HashSet<>();
+        long cursor = 0;
+        int added = 0;
+        do {
+            cursor = dict.scan(cursor, (key, value) -> seen.add(new String(key.bytes())));
+            // 한 칸 훑을 때마다 키를 더 넣어서, 훑는 사이에 테이블이 몇 번이고 커지고 옮겨지게 한다.
+            // 끝없이 넣으면 테이블도 끝없이 커져 한 바퀴가 끝나지 않으니 2000개에서 멈춘다.
+            for (int j = 0; j < 20 && added < 2000; j++) {
+                dict.add(Key.of("new" + added++), 0);
+            }
+        } while (cursor != 0);
+
+        for (int i = 0; i < 100; i++) {
+            assertTrue(seen.contains("old" + i), "빠뜨린 키: old" + i);
+        }
+    }
+
+    @Test
+    @DisplayName("scan 이 부른 visitor 가 지금 보는 키를 지워도 된다 — 주기적 만료가 그렇게 쓴다")
+    void scanAllowsDeletingCurrentKey() {
+        Dict<Integer> dict = new Dict<>();
+        for (int i = 0; i < 200; i++) {
+            dict.add(Key.of("k" + i), i);
+        }
+        long cursor = 0;
+        do {
+            cursor = dict.scan(cursor, (key, value) -> dict.remove(key));
+        } while (cursor != 0);
+
+        assertEquals(0, dict.size());
+    }
+
+    @Test
     @DisplayName("SipHash-1-2 는 같은 씨앗이면 같은 값, 씨앗이 다르면 다른 값을 낸다")
     void sipHashUsesSeed() {
         byte[] input = "hello".getBytes();

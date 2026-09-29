@@ -17,7 +17,7 @@ import java.util.List;
  * "만료됐는데 메모리에는 남아 있는 키"가 화면에 보이는 것이 이 프로젝트의 요점이다.
  *
  * @param totalKeys    담긴 키의 총 수. 아래 목록이 잘렸어도 이 수는 전체를 센 것이다.
- * @param expiringKeys 그중 만료 시각이 있는 키의 수. 샘플링이 고르는 대상이다.
+ * @param expiringKeys 그중 만료 시각이 있는 키의 수. 주기적 만료가 훑는 expires 테이블의 크기다.
  */
 public record KeyspaceSnapshot(int totalKeys, int expiringKeys, List<KeyView> keys) {
 

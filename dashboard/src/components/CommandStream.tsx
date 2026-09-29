@@ -5,7 +5,7 @@ import type { ActivityEvent } from '../types'
 
 const REMOVAL_LABELS = {
   LAZY_EXPIRED: '읽다가 만료',
-  ACTIVE_EXPIRED: '샘플링 만료',
+  ACTIVE_EXPIRED: '주기적 만료',
   DELETED: 'DEL',
 } as const
 

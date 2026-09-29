@@ -59,6 +59,12 @@ public final class Dict<V> {
     /** 옮기는 중인 옛 테이블의 버킷 번호. -1 이면 옮기는 중이 아니다. */
     private long rehashIdx = -1;
 
+    /**
+     * 0 보다 크면 옮기기를 멈춘다(pauserehash). {@link #scan} 이 도는 동안 켠다. 훑는 도중에 버킷이 옮겨지면
+     * 커서가 가리키는 자리가 바뀌어 키를 빠뜨리거나 두 번 볼 수 있다.
+     */
+    private int pauseRehash;
+
     public long size() {
         return used[0] + used[1];
     }
@@ -146,13 +152,118 @@ public final class Dict<V> {
     }
 
     /**
+     * 옮기기를 한 칸도 하지 않고 찾는다. 대시보드가 들여다볼 때 쓴다 — 보는 것만으로 테이블 모양이 바뀌면 안 된다.
+     */
+    public V peek(Key key) {
+        if (size() == 0) {
+            return null;
+        }
+        long h = SipHash.hash(key.bytes());
+        for (int t = 0; t <= 1; t++) {
+            if (table[t] == null) {
+                continue;
+            }
+            for (Entry<V> e = table[t][(int) (h & mask(t))]; e != null; e = e.next) {
+                if (e.key.equals(key)) {
+                    return e.value;
+                }
+            }
+            if (!isRehashing()) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 넣고 빼는 쪽이 지운 뒤에 부른다. 채움률이 10% 아래면 원소 수에 맞춰 줄인다.
      * 실제 Redis 의 {@code if (htNeedsResize(d)) dictResize(d)} 두 줄을 합친 것이다.
      */
     public void shrinkIfNeeded() {
-        long slots = slots();
-        if (slots > INITIAL_SIZE && size() * 100 / slots < MIN_FILL_PERCENT) {
+        if (needsResize()) {
             resize();
+        }
+    }
+
+    /** 버킷이 4개보다 많은데 채움률이 10% 아래인지(htNeedsResize). */
+    public boolean needsResize() {
+        long slots = slots();
+        return slots > INITIAL_SIZE && size() * 100 / slots < MIN_FILL_PERCENT;
+    }
+
+    /**
+     * 최대 ms 밀리초 동안 100 버킷씩 옮긴다(dictRehashMilliseconds). 명령이 뜸해서 옮기기가 멈춰 있을 때
+     * 서버의 주기 작업이 대신 밀어준다. 옮긴 버킷 수를 돌려준다.
+     */
+    public int rehashMilliseconds(int ms) {
+        if (pauseRehash > 0) {
+            return 0;
+        }
+        long start = System.nanoTime();
+        long limit = ms * 1_000_000L;
+        int rehashes = 0;
+        while (rehash(100)) {
+            rehashes += 100;
+            if (System.nanoTime() - start > limit) {
+                break;
+            }
+        }
+        return rehashes;
+    }
+
+    /**
+     * 커서 자리의 버킷 하나(옮기는 중이면 큰 테이블의 대응 버킷들까지)를 훑고 다음 커서를 준다(dictScan).
+     * 0 에서 시작해 0 이 돌아오면 한 바퀴를 다 돈 것이다.
+     *
+     * <h3>왜 커서를 거꾸로 세나</h3>
+     * 커서는 0, 1, 2, ... 가 아니라 <b>비트를 뒤집은 채로 1씩 더한다</b>. 테이블 크기가 8 이면
+     * {@code 000 → 100 → 010 → 110 → 001 → ...} 순이다. 이렇게 하면 훑는 사이에 테이블이 두 배로 커지거나
+     * 절반으로 줄어도, 이미 본 버킷에서 흩어져 나간 키들이 전부 "이미 지나온 자리"에 떨어진다.
+     * 크기가 2의 거듭제곱이고 버킷 번호가 해시의 아래 비트라서 성립하는 성질이다.
+     * 그래서 한 바퀴 동안 처음부터 있던 키는 적어도 한 번 반드시 본다(두 번 볼 수는 있다).
+     *
+     * <p>visitor 가 지금 보고 있는 키를 지워도 된다. 다음 칸을 먼저 잡아 두고 부르기 때문이다.
+     */
+    public long scan(long cursor, BiConsumer<Key, V> visitor) {
+        if (size() == 0) {
+            return 0;
+        }
+        pauseRehash++;
+        try {
+            long v = cursor;
+            if (!isRehashing()) {
+                long m0 = mask(0);
+                visitBucket(table[0][(int) (v & m0)], visitor);
+                v |= ~m0;
+                v = Long.reverse(v);
+                v++;
+                return Long.reverse(v);
+            }
+            int small = tableSize(0) <= tableSize(1) ? 0 : 1;
+            int large = 1 - small;
+            long m0 = mask(small);
+            long m1 = mask(large);
+            visitBucket(table[small][(int) (v & m0)], visitor);
+            // 작은 테이블의 버킷 하나는 큰 테이블의 버킷 여러 개로 퍼진다. 그 버킷들을 이어서 본다.
+            do {
+                visitBucket(table[large][(int) (v & m1)], visitor);
+                v |= ~m1;
+                v = Long.reverse(v);
+                v++;
+                v = Long.reverse(v);
+            } while ((v & (m0 ^ m1)) != 0);
+            return v;
+        } finally {
+            pauseRehash--;
+        }
+    }
+
+    private void visitBucket(Entry<V> bucket, BiConsumer<Key, V> visitor) {
+        Entry<V> e = bucket;
+        while (e != null) {
+            Entry<V> next = e.next;
+            visitor.accept(e.key, e.value);
+            e = next;
         }
     }
 
@@ -273,7 +384,9 @@ public final class Dict<V> {
 
     /** 찾기·넣기·지우기마다 한 번씩 부르는, 버킷 하나 옮기기(_dictRehashStep). */
     private void rehashStep() {
-        rehash(1);
+        if (pauseRehash == 0) {
+            rehash(1);
+        }
     }
 
     /**

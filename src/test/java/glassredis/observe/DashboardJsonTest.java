@@ -37,12 +37,14 @@ class DashboardJsonTest {
     }
 
     @Test
-    @DisplayName("만료 샘플링 한 주기의 요약")
+    @DisplayName("주기적 만료 한 번의 요약")
     void serialisesExpiryCycle() {
-        String json = DashboardJson.activity(List.of(record(1, new Event.ExpiryCycleCompleted(2, 40, 35, 900))), 0);
+        Event cycle = new Event.ExpiryCycleCompleted("SLOW", 2, 40, 35, 900, false, 12.5);
+        String json = DashboardJson.activity(List.of(record(1, cycle)), 0);
 
         assertEquals("{\"dropped\":0,\"events\":[{\"seq\":1,\"at\":1700000000000,\"type\":\"expiryCycle\","
-                + "\"rounds\":2,\"sampled\":40,\"expired\":35,\"nanos\":900}]}", json);
+                + "\"kind\":\"SLOW\",\"rounds\":2,\"sampled\":40,\"expired\":35,\"nanos\":900,"
+                + "\"timeLimitHit\":false,\"stalePercent\":12.5}]}", json);
     }
 
     @Test

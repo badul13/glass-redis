@@ -63,6 +63,12 @@ final class Json {
         out.append(value == null ? "null" : value.toString());
     }
 
+    static void field(StringBuilder out, String name, boolean value) {
+        separate(out);
+        string(out, name);
+        out.append(':').append(value);
+    }
+
     /**
      * 실수. JSON 에는 무한대가 없어서 {@code "inf"}, {@code "-inf"} 문자열로 쓴다.
      * Redis 가 응답에 쓰는 표기와 같게 맞췄다. NaN 은 점수로 들어올 수 없으므로 다루지 않는다.
