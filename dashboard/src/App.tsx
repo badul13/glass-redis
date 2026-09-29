@@ -14,7 +14,6 @@ const STATUS_LABELS = {
 
 export default function App() {
   const dashboard = useEventStream()
-  // 키 목록에서 고른 Sorted Set. 고르면 아래에 스킵 리스트 패널이 열린다.
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const sortedSet = useSortedSet(selectedKey)
 

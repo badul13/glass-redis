@@ -11,12 +11,8 @@ import glassredis.store.Keyspace;
 import java.util.List;
 
 /**
- * {@code TTL key} / {@code PTTL key} — 남은 시간을 초/밀리초로 준다.
- *
- * <p>특수값이 두 개 있다. 키가 없으면 {@code -2}, 키는 있는데 만료 시각이 없으면 {@code -1}.
- *
- * <p>{@code TTL} 은 밀리초를 초로 바꿀 때 버리지 않고 반올림한다. 그래서 {@code SET k v EX 10} 직후의
- * {@code TTL} 은 9 가 아니라 10 이다. 실제 Redis 도 {@code (ttl + 500) / 1000} 으로 계산한다.
+ * TTL key, PTTL key - 키 없으면 -2, 만료 시각 없으면 -1
+ * TTL - 초 단위 반올림 (ttl + 500) / 1000, Redis와 동일
  */
 public final class TtlCommand implements Command {
 
@@ -50,8 +46,7 @@ public final class TtlCommand implements Command {
             return Errors.wrongNumberOfArguments(name);
         }
         Keyspace keyspace = ctx.keyspace();
-        // get() 보다 먼저 시각을 찍는다. get() 이 "아직 안 만료"라고 판단한 시각보다 이르거나 같으므로
-        // 남은 시간이 음수로 계산되는 일이 없다.
+        // get()보다 시각 먼저 읽기 - 남은 시간 음수 방지
         long now = keyspace.now();
         Entry entry = keyspace.get(new Key(args.get(0)));
         if (entry == null) {

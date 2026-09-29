@@ -2,14 +2,13 @@ import { useState } from 'react'
 import type { Score, SortedSetSnapshot } from '../types'
 import type { SortedSetState } from '../useSortedSet'
 
-/** 칸 하나의 폭과 층 하나의 높이. */
 const COLUMN = 76
 const ROW = 26
 const BOX_WIDTH = 30
 const BOX_HEIGHT = 18
 const PAD_X = 16
 const PAD_TOP = 14
-/** 맨 아래 멤버 이름과 점수를 쓰는 자리. */
+/** 맨 아래 멤버 이름과 점수 자리 */
 const LABEL_HEIGHT = 38
 
 interface Step {
@@ -19,15 +18,9 @@ interface Step {
 }
 
 /**
- * 고른 Sorted Set 이 지금 어떤 모양으로 담겨 있는지 그린다. 작을 때는 listpack({@link ListpackStrip}),
- * 커지면 스킵 리스트다. 아래는 스킵 리스트 그림 이야기다.
- *
- * <p>가로로 늘어선 칸은 순서대로의 노드다. 0번 칸은 원소 없는 머리 노드, k 번 칸이 k 번째 노드다.
- * 노드마다 올라간 층수만큼 상자가 쌓이고, 같은 층의 다음 상자로 화살표가 간다.
- * 화살표 위 숫자가 span — 1층 기준으로 몇 칸을 건너뛰는지다.
- *
- * <p>노드에 커서를 올리면 그 노드의 순위를 셀 때 서버가 걷는 길을 칠한다.
- * 맨 위층에서 출발해 넘치기 직전까지 건너고, 한 층 내려가기를 반복한다. 지나온 span 의 합이 순위다.
+ * 고른 Sorted Set 내부 구조 - listpack 띠 또는 스킵 리스트 그림
+ * 스킵 리스트 0번 칸 = 머리 노드
+ * 노드 hover 시 순위 계산 경로 강조
  */
 export function SortedSetView({ state, onClose }: { state: SortedSetState | null; onClose: () => void }) {
   const [hovered, setHovered] = useState<number | null>(null)
@@ -62,7 +55,7 @@ export function SortedSetView({ state, onClose }: { state: SortedSetState | null
   )
 }
 
-/** 실제 Redis 기본 설정: 멤버 128개, 멤버 64바이트까지 listpack. */
+/** zset-max-listpack-entries, zset-max-listpack-value 기본값 */
 const MAX_LISTPACK_ENTRIES = 128
 const MAX_LISTPACK_VALUE = 64
 
@@ -78,13 +71,7 @@ function summary(snapshot: SortedSetSnapshot): string {
   return 'skiplist · 멤버 ' + snapshot.length + '개 · ' + snapshot.level + '층' + truncated
 }
 
-/**
- * listpack 인코딩. 층도 화살표도 없이 [멤버, 점수, 멤버, 점수, ...] 가 점수순으로 바이트 배열 한 줄에 이어져 있다.
- *
- * <p>멤버가 128개 이하이고 모두 64바이트 이하인 동안은 실제 Redis 도 이렇게 담는다. 순위를 세든 점수를 찾든
- * 처음부터 훑지만, 원소가 적을 때는 그게 스킵 리스트보다 빠르고 메모리도 훨씬 적게 든다.
- * 129번째 멤버가 들어오거나 64바이트를 넘는 멤버가 들어오는 순간 skiplist 로 바뀐다(되돌아가지 않는다).
- */
+/** 한도 초과 시 skiplist 전환 - 되돌림 없음 */
 function ListpackStrip({ snapshot, changed }: { snapshot: SortedSetSnapshot; changed: Set<string> }) {
   const shown = snapshot.nodes.length
   return (
@@ -121,7 +108,6 @@ function ListpackStrip({ snapshot, changed }: { snapshot: SortedSetSnapshot; cha
     </>
   )
 }
-/** 커서를 올린 노드의 순위를 어떻게 셌는지 한 줄로. */
 function PathCaption({ snapshot, target }: { snapshot: SortedSetSnapshot; target: number | null }) {
   if (target === null) {
     return <p className="skiplist-caption">노드 위에 커서 · ZRANK 가 걷는 길 표시</p>
@@ -152,7 +138,7 @@ function Diagram({
   const { level, header, nodes } = snapshot
   const shown = nodes.length
   const truncated = shown < snapshot.length
-  // 잘렸으면 그 너머를 가리키는 화살표가 떨어질 "…" 칸을 하나 둔다. 맨 끝 칸은 nil 이다.
+  // 잘린 경우 너머 화살표용 "…" 칸 추가, 맨 끝 칸은 nil
   const moreColumn = shown + 1
   const nilColumn = shown + (truncated ? 2 : 1)
 
@@ -164,7 +150,7 @@ function Diagram({
   const width = x(nilColumn) + 40
   const height = PAD_TOP + level * ROW + LABEL_HEIGHT
 
-  /** 한 칸의 층별 화살표. span 을 따라가 도착 칸을 정하고, 화면 밖이면 "…" 칸으로 보낸다. */
+  // 도착 칸이 화면 밖이면 "…" 칸으로
   const arrows = (column: number, spans: number[]) =>
     spans.map((span, floor) => {
       const target = span === -1 ? nilColumn : Math.min(column + span, truncated ? moreColumn : shown)
@@ -184,7 +170,6 @@ function Diagram({
       )
     })
 
-  /** 한 칸에 쌓인 상자들. */
   const tower = (column: number, floors: number, label: string) =>
     Array.from({ length: floors }, (_, floor) => (
       <g key={'b' + column + ':' + floor}>
@@ -212,7 +197,6 @@ function Diagram({
         </marker>
       </defs>
 
-      {/* 층 번호 */}
       {Array.from({ length: level }, (_, floor) => (
         <text key={'f' + floor} x={2} y={y(floor) + 13} className="floor">
           {floor + 1}
@@ -225,7 +209,7 @@ function Diagram({
       {nodes.map((node, index) => {
         const column = index + 1
         return (
-          // 점수가 바뀌면 키가 바뀌어 새로 그려지고, 그때 한 번 반짝인다.
+          // 점수 변경 시 key 변경으로 재마운트 - 강조 애니메이션 재생
           <g
             key={node.member + '@' + String(node.score)}
             className={changed.has(node.member) ? 'node fresh' : 'node'}
@@ -259,10 +243,7 @@ function Diagram({
   )
 }
 
-/**
- * target 번째 노드의 순위를 셀 때 걷는 길. 서버의 SkipList.rank 와 같은 걸음이다.
- * 위층부터 "건너가도 target 을 넘지 않으면 건넌다"를 반복하고, 못 건너면 한 층 내려간다.
- */
+/** 서버 SkipList.rank와 같은 경로 - 지나온 span 합 = 순위 */
 function pathTo(snapshot: SortedSetSnapshot, target: number): Step[] {
   const spanAt = (column: number, floor: number) =>
     column === 0 ? snapshot.header[floor] : (snapshot.nodes[column - 1].spans[floor] ?? -1)

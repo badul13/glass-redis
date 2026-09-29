@@ -15,7 +15,7 @@ class SortedSetCommandsTest {
 
     private final CommandTester tester = new CommandTester();
 
-    /** 순위표 하나를 깔고 시작한다. 점수 순: carol(10) < alice(20) < bob(30) < dave(40) */
+    // 점수 순: carol(10) < alice(20) < bob(30) < dave(40)
     @BeforeEach
     void leaderboard() {
         run("ZADD", "board", "20", "alice", "30", "bob", "10", "carol", "40", "dave");
@@ -24,7 +24,7 @@ class SortedSetCommandsTest {
     // --- ZADD ---
 
     @Test
-    @DisplayName("ZADD 는 새 멤버 수만 세고, 있는 멤버는 점수만 바꾼다")
+    @DisplayName("ZADD - 새 멤버 수만 집계, 기존 멤버는 점수만 갱신")
     void zaddCountsNewMembers() {
         assertEquals(integer(1), run("ZADD", "board", "50", "alice", "5", "erin"));
 
@@ -33,13 +33,13 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("CH 를 주면 점수가 바뀐 멤버까지 센다")
+    @DisplayName("CH 지정 시 점수가 바뀐 멤버까지 집계")
     void zaddCh() {
         assertEquals(integer(2), run("ZADD", "board", "CH", "21", "alice", "30", "bob", "1", "erin"));
     }
 
     @Test
-    @DisplayName("NX 는 새 멤버만, XX 는 있는 멤버만 건드린다")
+    @DisplayName("NX 는 새 멤버만, XX 는 기존 멤버만 대상")
     void zaddNxXx() {
         assertEquals(integer(1), run("ZADD", "board", "NX", "99", "alice", "1", "erin"));
         assertEquals(bulk("20"), run("ZSCORE", "board", "alice"));
@@ -50,7 +50,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("GT 는 점수가 오를 때만, LT 는 내릴 때만 바꾼다")
+    @DisplayName("GT 는 점수가 오를 때만, LT 는 내릴 때만 갱신")
     void zaddGtLt() {
         run("ZADD", "board", "GT", "5", "alice");
         assertEquals(bulk("20"), run("ZSCORE", "board", "alice"));
@@ -62,7 +62,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("INCR 는 더한 결과를 주고, 조건에 막히면 nil 이다")
+    @DisplayName("INCR - 더한 결과 응답, 조건에 막히면 nil")
     void zaddIncr() {
         assertEquals(bulk("25.5"), run("ZADD", "board", "INCR", "5.5", "alice"));
         assertEquals(RespValue.NIL, run("ZADD", "board", "NX", "INCR", "1", "alice"));
@@ -79,12 +79,12 @@ class SortedSetCommandsTest {
                 run("ZADD", "z", "INCR", "1", "a", "2", "b"));
         assertEquals(error("ERR syntax error"), run("ZADD", "z", "1", "a", "2"));
         assertEquals(error("ERR value is not a valid float"), run("ZADD", "z", "1", "a", "x", "b"));
-        // 점수 하나가 틀리면 앞쪽 멤버도 들어가지 않는다
+        // 점수 하나만 틀려도 앞쪽 멤버까지 미반영
         assertEquals(integer(0), run("EXISTS", "z"));
     }
 
     @Test
-    @DisplayName("XX 로 없는 키에 ZADD 하면 키를 만들지 않는다")
+    @DisplayName("없는 키에 ZADD XX 시 키 생성 없음")
     void zaddXxOnMissingKey() {
         assertEquals(integer(0), run("ZADD", "z", "XX", "1", "a"));
         assertEquals(integer(0), run("EXISTS", "z"));
@@ -93,7 +93,7 @@ class SortedSetCommandsTest {
     // --- 순위 ---
 
     @Test
-    @DisplayName("ZRANK 는 낮은 점수부터, ZREVRANK 는 높은 점수부터 0 이다")
+    @DisplayName("ZRANK 는 낮은 점수부터, ZREVRANK 는 높은 점수부터 0")
     void ranks() {
         assertEquals(integer(0), run("ZRANK", "board", "carol"));
         assertEquals(integer(3), run("ZRANK", "board", "dave"));
@@ -102,7 +102,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("ZINCRBY 로 점수가 오르면 순위가 바뀐다")
+    @DisplayName("ZINCRBY 로 점수 상승 시 순위 변동")
     void zincrbyMovesMember() {
         assertEquals(bulk("45"), run("ZINCRBY", "board", "35", "carol"));
 
@@ -111,7 +111,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("무한대끼리 더해 NaN 이 되면 에러고 점수는 그대로다")
+    @DisplayName("무한대끼리 더해 NaN 이면 에러, 점수는 그대로")
     void zincrbyNaN() {
         run("ZADD", "z", "inf", "a");
 
@@ -122,7 +122,7 @@ class SortedSetCommandsTest {
     // --- 순위 구간 ---
 
     @Test
-    @DisplayName("ZRANGE 는 순위 구간을 주고, WITHSCORES 면 점수를 끼워 준다")
+    @DisplayName("ZRANGE - 순위 구간 응답, WITHSCORES 면 점수 포함")
     void zrangeByRank() {
         assertEquals(array("carol", "alice", "bob", "dave"), run("ZRANGE", "board", "0", "-1"));
         assertEquals(array("bob", "dave"), run("ZRANGE", "board", "-2", "-1"));
@@ -131,7 +131,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("REV 와 ZREVRANGE 는 높은 점수부터 센다")
+    @DisplayName("REV 와 ZREVRANGE - 높은 점수부터")
     void zrangeReverse() {
         assertEquals(array("dave", "bob"), run("ZREVRANGE", "board", "0", "1"));
         assertEquals(array("dave", "bob"), run("ZRANGE", "board", "0", "1", "REV"));
@@ -141,7 +141,7 @@ class SortedSetCommandsTest {
     // --- 점수 구간 ---
 
     @Test
-    @DisplayName("ZRANGEBYSCORE 는 점수 구간을 주고, ( 를 붙인 끝은 뺀다")
+    @DisplayName("ZRANGEBYSCORE - 점수 구간 응답, ( 를 붙인 끝은 제외")
     void zrangeByScore() {
         assertEquals(array("alice", "bob"), run("ZRANGEBYSCORE", "board", "20", "30"));
         assertEquals(array("bob"), run("ZRANGEBYSCORE", "board", "(20", "30"));
@@ -150,7 +150,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("거꾸로 점수 구간을 볼 때는 max 가 먼저 온다")
+    @DisplayName("역순 점수 구간 조회 시 max 가 먼저")
     void zrevrangeByScore() {
         assertEquals(array("bob", "alice"), run("ZREVRANGEBYSCORE", "board", "30", "20"));
         assertEquals(array("bob", "alice"), run("ZRANGE", "board", "30", "20", "BYSCORE", "REV"));
@@ -158,7 +158,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("LIMIT 은 건너뛸 수와 받을 수를 정하고, 점수 구간에서만 쓸 수 있다")
+    @DisplayName("LIMIT - 건너뛸 수와 받을 수 지정, 점수 구간에서만 사용 가능")
     void limit() {
         assertEquals(array("alice", "bob"), run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "1", "2"));
         assertEquals(array("alice", "bob", "dave"), run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "1", "-1"));
@@ -168,7 +168,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("ZCOUNT 는 구간에 든 멤버 수를 준다")
+    @DisplayName("ZCOUNT - 구간에 든 멤버 수")
     void zcount() {
         assertEquals(integer(4), run("ZCOUNT", "board", "-inf", "+inf"));
         assertEquals(integer(2), run("ZCOUNT", "board", "15", "35"));
@@ -180,7 +180,7 @@ class SortedSetCommandsTest {
     // --- 지우기와 자료형 ---
 
     @Test
-    @DisplayName("ZREM 으로 마지막 멤버를 빼면 키가 사라진다")
+    @DisplayName("ZREM 으로 마지막 멤버 제거 시 키 소멸")
     void zremRemovesKeyWhenEmpty() {
         assertEquals(integer(2), run("ZREM", "board", "alice", "bob", "nobody"));
         assertEquals(array("carol", "dave"), run("ZRANGE", "board", "0", "-1"));
@@ -190,7 +190,7 @@ class SortedSetCommandsTest {
     }
 
     @Test
-    @DisplayName("TYPE 은 zset 을 주고, 다른 자료형 명령은 WRONGTYPE 이다")
+    @DisplayName("TYPE 은 zset, 다른 자료형 명령은 WRONGTYPE")
     void typeAndWrongType() {
         run("SET", "s", "v");
 

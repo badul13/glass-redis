@@ -1,12 +1,7 @@
 import type { KeyspaceSnapshot } from '../types'
 import { bytes, millis } from '../format'
 
-/**
- * 지금 키스페이스에 무엇이 들어 있는지.
- *
- * <p>만료 시각이 지났는데 아직 지워지지 않은 키를 숨기지 않는 것이 요점이다.
- * 그 줄이 화면에 남아 있다가 주기적 만료에 걸려 사라지는 게 이 프로젝트가 보여주려는 장면이다.
- */
+/** 만료됐지만 아직 안 지워진 키는 stale 표시 */
 export function KeyspaceView({
   snapshot,
   selectedKey,
@@ -37,7 +32,6 @@ export function KeyspaceView({
           <tbody>
             {keys.map((key) => {
               const stale = key.ttl !== null && key.ttl <= 0
-              // 구조를 그릴 수 있는 건 지금은 Sorted Set 뿐이다.
               const selectable = key.type === 'zset'
               const classes = [stale && 'stale', selectable && 'selectable', key.key === selectedKey && 'selected']
               return (

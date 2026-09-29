@@ -7,31 +7,18 @@ import glassredis.store.encoding.Listpack;
 import java.util.Arrays;
 
 /**
- * Sorted Set. 작을 때는 listpack, 커지면 skiplist(해시 + 스킵 리스트)에 담는다. Redis 7.2 {@code t_zset.c} 의 규칙을 따른다.
- *
- * <h2>listpack 인코딩</h2>
- * {@code [멤버, 점수, 멤버, 점수, ...]} 를 <b>점수 순으로 정렬한 채</b> 이어 붙인다. 점수는 2^62 이하의 정수면
- * 정수 인코딩으로, 아니면 {@code "1.5"} 같은 문자열로 들어간다. 무엇을 하든 처음부터 훑는다 — 순위를 세는 것도,
- * 점수를 찾는 것도 O(n) 이다. 멤버가 128개 이하일 때는 그래도 스킵 리스트보다 빠르고 메모리는 훨씬 적게 쓴다.
- *
- * <h2>skiplist 인코딩</h2>
- * 해시(dict: 멤버 → 점수)와 {@link SkipList} 에 같은 데이터를 나눠 담는다. 점수 찾기는 해시로 O(1),
- * 순위·구간은 스킵 리스트로 O(log n).
- *
- * <h2>전환 규칙</h2>
- * <ul>
- *   <li>새로 만들 때: 넣을 개수가 128({@code zset-max-listpack-entries}) 이하이고 <b>첫 멤버</b>가 64바이트
- *       ({@code zset-max-listpack-value}) 이하면 listpack, 아니면 곧장 skiplist.</li>
- *   <li>새 멤버를 넣을 때: 넣으면 129개가 되거나 그 멤버가 64바이트를 넘으면 skiplist 로 바꾼 뒤 넣는다.</li>
- *   <li>한 번 skiplist 가 되면 줄어도 돌아가지 않는다.</li>
- * </ul>
+ * Sorted Set - t_zset.c
+ * 작을 때 listpack에 [멤버, 점수, ...] 점수 순 저장 - 모든 연산 O(n)
+ * 커지면 dict(멤버 → 점수)와 SkipList에 같은 데이터 이중 보관
+ * skiplist 전환 후 복귀 없음
  */
 public final class SortedSetValue implements Value {
 
+    /** zset-max-listpack-entries */
     static final int MAX_LISTPACK_ENTRIES = 128;
+    /** zset-max-listpack-value */
     static final int MAX_LISTPACK_VALUE = 64;
 
-    /** 멤버 하나를 받는 콜백. 점수는 이미 double 로 풀어서 준다. */
     @FunctionalInterface
     public interface MemberVisitor {
         void visit(byte[] member, double score);
@@ -44,7 +31,7 @@ public final class SortedSetValue implements Value {
     private SortedSetValue() {
     }
 
-    /** 넣을 개수와 첫 멤버의 길이를 보고 인코딩을 고른다(zsetTypeCreate). */
+    /** 멤버 길이는 첫 멤버만 확인 - zsetTypeCreate */
     public static SortedSetValue create(long sizeHint, int firstMemberLength) {
         SortedSetValue zset = new SortedSetValue();
         if (sizeHint <= MAX_LISTPACK_ENTRIES && firstMemberLength <= MAX_LISTPACK_VALUE) {
@@ -72,14 +59,14 @@ public final class SortedSetValue implements Value {
         return listpack != null ? listpack.length() / 2 : order.length();
     }
 
-    /** 기존 Sorted Set 에 많이 넣기 전에 부른다(zsetTypeMaybeConvert). */
+    /** 다건 삽입 전 호출 - zsetTypeMaybeConvert */
     public void prepareForAdd(long sizeHint) {
         if (listpack != null && sizeHint > MAX_LISTPACK_ENTRIES) {
             convertToSkipList(sizeHint);
         }
     }
 
-    /** 없으면 {@code null}. */
+    /** 없으면 null */
     public Double score(Key member) {
         if (listpack != null) {
             int p = findMember(member.bytes());
@@ -88,10 +75,7 @@ public final class SortedSetValue implements Value {
         return dict.get(member);
     }
 
-    /**
-     * 넣거나 점수를 바꾼다. 새 멤버였으면 {@code true}.
-     * 점수가 바뀌면 지웠다가 제자리를 다시 찾아 넣는다 — 두 인코딩 모두 정렬을 유지해야 해서다.
-     */
+    /** 새 멤버면 true */
     public boolean put(Key member, double score) {
         if (listpack != null) {
             int p = findMember(member.bytes());
@@ -122,7 +106,6 @@ public final class SortedSetValue implements Value {
         return true;
     }
 
-    /** 뺐으면 {@code true}. */
     public boolean remove(Key member) {
         if (listpack != null) {
             int p = findMember(member.bytes());
@@ -142,7 +125,7 @@ public final class SortedSetValue implements Value {
         return true;
     }
 
-    /** 0부터 세는 순위(낮은 점수가 0). 없으면 -1. */
+    /** 0부터 세는 순위, 없으면 -1 */
     public long rank(Key member) {
         if (listpack != null) {
             long rank = 0;
@@ -158,7 +141,7 @@ public final class SortedSetValue implements Value {
         return score == null ? -1 : order.rank(score, member.bytes()) - 1;
     }
 
-    /** 점수 구간에 드는 첫 멤버의 순위(0부터). 없으면 -1. */
+    /** 0부터 세는 순위, 없으면 -1 */
     public long firstRankIn(ScoreRange range) {
         if (listpack != null) {
             long rank = 0;
@@ -175,12 +158,12 @@ public final class SortedSetValue implements Value {
         return node == null ? -1 : order.rank(node.score(), node.member()) - 1;
     }
 
-    /** 점수 구간에 드는 마지막 멤버의 순위(0부터). 없으면 -1. */
+    /** 0부터 세는 순위, 없으면 -1 */
     public long lastRankIn(ScoreRange range) {
         if (listpack != null) {
             long rank = size() - 1;
             for (int p = listpack.last(); p != -1; p = listpack.prev(listpack.prev(p))) {
-                // 뒤에서 걸으면 점수 원소를 먼저 만난다. 멤버는 그 바로 앞이다.
+                // 뒤에서 걷는 중이라 p는 점수 원소
                 double score = scoreAt(p);
                 if (range.belowMax(score)) {
                     return range.aboveMin(score) ? rank : -1;
@@ -193,14 +176,11 @@ public final class SortedSetValue implements Value {
         return node == null ? -1 : order.rank(node.score(), node.member()) - 1;
     }
 
-    /**
-     * 순위 start..end(포함, 0부터) 의 멤버를 차례로 넘긴다. reverse 면 높은 점수부터 센 순위다.
-     * listpack 은 그 자리까지 걷고, skiplist 는 span 으로 첫 노드를 바로 찾은 뒤 걷는다.
-     */
+    /** 순위 start..end - 양 끝 포함, 0부터, reverse면 높은 점수 기준 순위 */
     public void forEachInRankRange(long start, long end, boolean reverse, MemberVisitor visitor) {
         long count = end - start + 1;
         if (listpack != null) {
-            // 원소는 멤버와 점수가 번갈아 있으니 순위 r 의 멤버는 2r 번째다.
+            // 순위 r의 멤버 = 2r번째 원소
             int p = reverse ? listpack.seek(-2 * start - 2) : listpack.seek(2 * start);
             for (long i = 0; i < count && p != -1; i++) {
                 int sp = listpack.next(p);
@@ -228,7 +208,7 @@ public final class SortedSetValue implements Value {
         return dict;
     }
 
-    // --- listpack 속 ---
+    // --- listpack ---
 
     private int findMember(byte[] member) {
         for (int p = listpack.first(); p != -1; p = listpack.next(listpack.next(p))) {
@@ -239,7 +219,7 @@ public final class SortedSetValue implements Value {
         return -1;
     }
 
-    /** 앞 멤버의 위치. 처음이면 -1. */
+    /** 처음이면 -1 */
     private int prevMember(int memberPos) {
         int scorePos = listpack.prev(memberPos);
         return scorePos == -1 ? -1 : listpack.prev(scorePos);
@@ -249,10 +229,7 @@ public final class SortedSetValue implements Value {
         return listpack.isInteger(p) ? listpack.integer(p) : Doubles.parse(listpack.get(p));
     }
 
-    /**
-     * 정렬을 지키며 넣는다(zzlInsert). 처음부터 걸으며 "점수가 더 크거나, 같은 점수에 멤버가 사전순으로 뒤"인
-     * 첫 자리 앞에 넣는다.
-     */
+    /** 정렬 유지 삽입 - zzlInsert */
     private void insertSorted(byte[] member, double score) {
         byte[] scoreBytes = Doubles.isSmallInteger(score)
                 ? Long.toString((long) score).getBytes(java.nio.charset.StandardCharsets.US_ASCII)

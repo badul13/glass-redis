@@ -24,7 +24,7 @@ class ActiveExpireCycleTest {
     private final ActiveExpireCycle cycle = new ActiveExpireCycle(keyspace, EventBus.NONE);
 
     @Test
-    @DisplayName("만료된 키만 있으면 10% 규칙에 따라 되풀이하며 전부 지운다")
+    @DisplayName("만료된 키만 있으면 10% 규칙에 따라 반복하며 전부 삭제")
     void repeatsWhileMostAreExpired() {
         putKeys("dead", 200, clock.millis() + 10);
         clock.advanceMillis(20);
@@ -34,7 +34,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("아직 만료되지 않은 키는 지우지 않는다")
+    @DisplayName("아직 만료되지 않은 키는 유지")
     void keepsLiveKeys() {
         putKeys("live", 100, clock.millis() + 60_000);
 
@@ -43,7 +43,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("만료된 키가 조금만 섞여 있으면 한 번에 다 치우지 않고 멈춘다 — 놓친 키도 읽을 때는 없는 키로 보인다")
+    @DisplayName("만료된 키가 조금만 섞여 있으면 다 치우기 전에 중단 - 놓친 키도 읽을 때는 없는 키 취급")
     void stopsEarlyWhenFewAreExpired() {
         putKeys("live", 1000, clock.millis() + 60_000);
         putKeys("dead", 20, clock.millis() + 10);
@@ -58,13 +58,13 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("커서가 이어지므로 여러 번 돌면 만료된 키를 결국 하나도 빠뜨리지 않는다")
+    @DisplayName("커서가 이어지므로 여러 번 돌면 만료된 키 누락 없음")
     void cursorEventuallyCoversEverything() {
         putKeys("live", 1000, clock.millis() + 60_000);
         putKeys("dead", 20, clock.millis() + 10);
         clock.advanceMillis(20);
 
-        // 한 번에 키 20개쯤을 보고, 1020개를 한 바퀴 도는 데 50번 남짓이면 충분하다. 넉넉히 100번.
+        // 1회 약 20개 확인, 1020개 한 바퀴 ≈ 50회 - 여유 있게 100회
         for (int i = 0; i < 100; i++) {
             cycle.run(Kind.SLOW);
         }
@@ -73,7 +73,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("FAST 는 치울 게 별로 없어 보이면 아예 돌지 않는다")
+    @DisplayName("FAST - 치울 게 별로 없어 보이면 실행 생략")
     void fastSkipsWhenLittleIsStale() {
         putKeys("dead", 50, clock.millis() + 10);
         clock.advanceMillis(20);
@@ -83,7 +83,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("키가 많이 한꺼번에 만료되면 SLOW 는 25ms 한도에 걸려 남은 일을 미룬다")
+    @DisplayName("키가 한꺼번에 많이 만료되면 SLOW 는 25ms 한도에서 남은 일 보류")
     void slowRespectsTimeLimit() {
         EventHub hub = new EventHub();
         EventBuffer screen = hub.subscribe();
@@ -102,7 +102,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("주기적 만료가 지운 키는 읽다가 지워진 것과 다른 이유로 알리고, 주기 요약도 알린다")
+    @DisplayName("주기적 만료로 지운 키는 읽기 중 삭제와 다른 이유로 통지, 주기 요약도 통지")
     void publishesRemovalsAndSummary() {
         EventHub hub = new EventHub();
         EventBuffer screen = hub.subscribe();
@@ -123,7 +123,7 @@ class ActiveExpireCycleTest {
     }
 
     @Test
-    @DisplayName("볼 키가 하나도 없는 주기는 알리지 않는다")
+    @DisplayName("볼 키가 하나도 없는 주기는 통지 생략")
     void publishesNothingWhenIdle() {
         EventHub hub = new EventHub();
         EventBuffer screen = hub.subscribe();

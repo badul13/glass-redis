@@ -9,12 +9,7 @@ const REMOVAL_LABELS = {
   DELETED: 'DEL',
 } as const
 
-/**
- * 서버에서 벌어지는 일을 벌어지는 순서대로 그린다.
- *
- * <p>새 줄이 바닥에 쌓이는데, 사용자가 위로 올려 과거를 읽는 중이라면 따라 내려가면 안 된다.
- * 그래서 바닥 근처에 있을 때만 자동으로 따라간다.
- */
+/** 바닥 근처일 때만 새 줄 따라 자동 스크롤 */
 export function CommandStream({ rows }: { rows: Row[] }) {
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -108,7 +103,6 @@ function Body({ event }: { event: ActivityEvent }) {
         </>
       )
     case 'expiryCycle':
-      // 만료 주기는 만료 패널에서만 그린다.
       return null
   }
 }

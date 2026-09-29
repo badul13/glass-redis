@@ -20,42 +20,25 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * 대시보드를 띄우는 HTTP 서버. Redis 포트와는 다른 포트를 쓴다.
- *
- * <p>JDK 에 들어 있는 {@link HttpServer} 를 쓴다. 의존성을 하나도 늘리지 않고 정적 파일과
- * 이벤트 스트림을 내보내는 데에는 충분하다.
- *
- * <h2>왜 SSE 인가</h2>
- * 서버가 브라우저로 밀어주기만 하면 되고 브라우저가 서버로 보낼 것은 없다. 그래서 웹소켓처럼
- * 양방향 연결을 세울 이유가 없다. SSE 는 그냥 끊기지 않는 HTTP 응답이라 프록시도 잘 통과하고,
- * 끊기면 브라우저가 알아서 다시 붙는다.
- *
- * <h2>화면마다 자기 큐</h2>
- * 접속하면 {@link EventHub} 에 구독을 하나 등록하고, 끊으면 뗀다. 탭을 두 개 열면 큐도 두 개다.
- * 마지막 탭을 닫으면 구독이 0 이 되고, 그때부터 서버는 이벤트를 만들지도 않는다.
- *
- * <h2>키 목록은 스트림에 실어 보낸다</h2>
- * 별도의 조회 API 를 두고 브라우저가 주기적으로 물어보게 할 수도 있지만, 그러면 연결이 둘이 되고
- * 이벤트와 목록의 시점이 어긋난다. 같은 스트림에 {@code keyspace} 라는 이름으로 같이 실어 보낸다.
+ * 대시보드 HTTP 서버 - JDK HttpServer로 정적 파일 + SSE 스트림
+ * 탭당 EventHub 구독 1개
+ * 키 목록도 같은 스트림에 keyspace 이벤트로 전송 - 시점 일치 목적
  */
 public final class DashboardServer implements AutoCloseable {
 
-    /** 기본 포트. Redis 쪽(6380)과 겹치지 않게 흔한 개발용 포트를 쓴다. */
     public static final int DEFAULT_PORT = 8080;
 
-    /** 이벤트를 모아 보내는 주기. 초당 10번이면 사람 눈에는 실시간이고, 브라우저는 충분히 따라온다. */
+    /** 이벤트 묶음 전송 주기 */
     private static final Duration TICK = Duration.ofMillis(100);
 
-    /** 스킵 리스트 그림을 다시 뜨는 주기. 명령 하나에 구조가 바뀌는 게 바로 보일 만큼 짧게 잡는다. */
     private static final Duration SORTED_SET_PERIOD = Duration.ofMillis(200);
 
-    /** 키 목록을 다시 뜨는 주기. 남은 TTL 이 줄어드는 게 보일 정도면 된다. */
     private static final long SNAPSHOT_PERIOD_MILLIS = 500;
 
-    /** 한 번에 보내는 이벤트 수 상한. 이보다 많이 밀려 있으면 다음 차례에 마저 보낸다. */
+    /** 1회 전송 이벤트 수 상한 - 나머지는 다음 차례 */
     private static final int MAX_BATCH = 500;
 
-    /** 정적 파일을 찾는 클래스패스 위치. {@code dashboard/dist} 를 빌드가 여기로 복사해 둔다. */
+    /** 빌드 시 dashboard/dist 복사 위치(클래스패스) */
     private static final String STATIC_ROOT = "dashboard/";
 
     private static final Map<String, String> CONTENT_TYPES = Map.of(
@@ -72,10 +55,9 @@ public final class DashboardServer implements AutoCloseable {
     private final int requestedPort;
     private final EventHub hub;
 
-    /** 키 목록을 떠 오는 통로. 실행 스레드에 부탁하는 일은 서버 쪽이 알아서 한다. */
+    /** 실행 스레드 전달은 서버 쪽 담당 */
     private final Supplier<KeyspaceSnapshot> keyspace;
 
-    /** Sorted Set 하나의 스킵 리스트를 떠 오는 통로. 키 목록과 마찬가지로 실행 스레드에서 뜬다. */
     private final Function<byte[], SortedSetSnapshot> sortedSet;
 
     private final String staticRoot;
@@ -89,7 +71,7 @@ public final class DashboardServer implements AutoCloseable {
         this(bindAddress, port, hub, keyspace, sortedSet, STATIC_ROOT);
     }
 
-    /** 정적 파일을 다른 데서 찾게 한다. 대시보드를 빌드하지 않은 상태를 테스트할 때만 쓴다. */
+    /** 테스트용 - 대시보드 미빌드 상태 재현 */
     DashboardServer(String bindAddress, int port, EventHub hub, Supplier<KeyspaceSnapshot> keyspace,
                     Function<byte[], SortedSetSnapshot> sortedSet,
                     String staticRoot) {
@@ -103,7 +85,7 @@ public final class DashboardServer implements AutoCloseable {
 
     public void start() throws IOException {
         http = HttpServer.create(new InetSocketAddress(bindAddress, requestedPort), 0);
-        // 스트림 하나가 스레드 하나를 붙잡고 끝나지 않는다. 가상 스레드라 붙잡혀 있어도 비싸지 않다.
+        // 가상 스레드 - 스트림마다 스레드 장기 점유
         handlers = Executors.newVirtualThreadPerTaskExecutor();
         http.setExecutor(handlers);
         http.createContext("/api/stream", this::handleStream);
@@ -121,8 +103,7 @@ public final class DashboardServer implements AutoCloseable {
     public void close() {
         running = false;
         if (http != null) {
-            // 스트림 스레드는 running 을 보고 다음 차례(최대 100ms)에 스스로 빠져나온다.
-            // 여기서 기다려주지 않으면 stop() 이 그 연결을 강제로 끊는다.
+            // 스트림 스레드가 다음 TICK에 스스로 빠져나올 유예 1초
             http.stop(1);
         }
         if (handlers != null) {
@@ -133,14 +114,14 @@ public final class DashboardServer implements AutoCloseable {
     private void handleStream(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().add("Cache-Control", "no-cache");
-        // 길이를 모르는 응답이다. 0 을 주면 청크 방식으로 끝없이 내보낸다.
+        // 0 - 청크 전송
         exchange.sendResponseHeaders(200, 0);
 
         EventBuffer screen = hub.subscribe();
         try (OutputStream body = exchange.getResponseBody()) {
             stream(body, screen);
         } catch (IOException closed) {
-            // 브라우저가 탭을 닫거나 새로고침했다. 스트림에서는 이게 정상 종료다.
+            // 탭 닫기·새로고침 - 정상 종료
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
@@ -149,11 +130,10 @@ public final class DashboardServer implements AutoCloseable {
     }
 
     private void stream(OutputStream body, EventBuffer screen) throws IOException, InterruptedException {
-        // 0 으로 두면 첫 바퀴에서 바로 키 목록을 보낸다. 안 그러면 첫 명령이 올 때까지 화면이 비어 있다.
+        // 0 - 첫 바퀴에서 키 목록 즉시 전송
         long nextSnapshot = 0;
 
         while (running) {
-            // 여기서 최대 TICK 만큼 기다린다. 이벤트가 오면 바로 깨어나고, 없으면 시간이 차서 깨어난다.
             EventRecord first = screen.poll(TICK);
 
             List<EventRecord> batch = new ArrayList<>();
@@ -179,12 +159,8 @@ public final class DashboardServer implements AutoCloseable {
     }
 
     /**
-     * {@code /api/zset?key=이름} — Sorted Set 하나의 스킵 리스트 모양을 흘려보낸다.
-     *
-     * <p>키 목록과 달리 이건 화면에서 키를 골랐을 때만 필요하다. 그래서 {@code /api/stream} 에 싣지 않고
-     * 따로 연다. 다른 키를 고르면 브라우저가 이 연결을 닫고 새로 연다.
-     *
-     * <p>주기마다 떠 보되, 모양이 바뀌었을 때만 보낸다. 가만히 있는 순위표를 초당 다섯 번 다시 보낼 이유가 없다.
+     * /api/zset?key=이름 - 화면에서 고른 키 하나의 스킵 리스트 스트림
+     * 주기마다 스냅샷, 변경 시에만 전송
      */
     private void handleSortedSet(HttpExchange exchange) throws IOException {
         byte[] key = queryParameter(exchange, "key");
@@ -212,13 +188,13 @@ public final class DashboardServer implements AutoCloseable {
                 Thread.sleep(SORTED_SET_PERIOD);
             }
         } catch (IOException closed) {
-            // 다른 키를 골랐거나 탭을 닫았다. 정상 종료다.
+            // 다른 키 선택 또는 탭 닫기
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
-    /** 쿼리 문자열에서 값 하나를 UTF-8 바이트로 꺼낸다. 없으면 {@code null}. */
+    /** 없으면 null */
     private static byte[] queryParameter(HttpExchange exchange, String name) {
         String query = exchange.getRequestURI().getRawQuery();
         if (query == null) {
@@ -235,11 +211,8 @@ public final class DashboardServer implements AutoCloseable {
     }
 
     /**
-     * SSE 한 덩어리를 쓴다.
-     *
-     * <p>형식은 {@code event: 이름}, {@code data: 내용}, 그리고 빈 줄 하나다. 빈 줄이 "여기까지가 한 건"이라는
-     * 표시라서 빠뜨리면 브라우저는 계속 다음 줄을 기다린다. JSON 안에는 줄바꿈이 들어가지 않으므로
-     * {@code data:} 한 줄로 끝난다.
+     * 끝의 빈 줄 = 한 건의 끝 - 누락 시 브라우저 무한 대기
+     * JSON에 줄바꿈 없음 - data: 한 줄
      */
     private static void send(OutputStream body, String type, String json) throws IOException {
         body.write(("event: " + type + "\ndata: " + json + "\n\n").getBytes(StandardCharsets.UTF_8));
@@ -250,7 +223,7 @@ public final class DashboardServer implements AutoCloseable {
         if (path.endsWith("/")) {
             path += "index.html";
         }
-        // ".." 로 클래스패스 밖을 짚는 요청을 막는다.
+        // ".." 경로 차단 - 클래스패스 밖 접근 방지
         String resource = staticRoot + path.substring(1);
         byte[] content = path.contains("..") ? null : read(resource);
 
@@ -277,7 +250,6 @@ public final class DashboardServer implements AutoCloseable {
         }
     }
 
-    /** 대시보드를 아직 빌드하지 않았을 때 브라우저에 그대로 띄워줄 안내. */
     private static byte[] notBuiltMessage(String path) {
         String html = """
                 <!doctype html><html lang="ko"><meta charset="utf-8">

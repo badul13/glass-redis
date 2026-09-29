@@ -22,12 +22,12 @@ class EventHubTest {
     private final EventHub hub = new EventHub();
 
     @Test
-    @DisplayName("보고 있는 화면이 없으면 꺼진 것으로 답한다 — 발행하는 쪽이 이벤트를 만들지도 않게")
+    @DisplayName("보는 화면이 없으면 비활성으로 응답 - 발행 측의 이벤트 생성 자체를 생략")
     void disabledWhileNobodyWatches() {
         assertFalse(hub.enabled());
         assertEquals(0, hub.screenCount());
 
-        // 아무도 안 볼 때 발행해도 조용히 버려진다.
+        // 보는 화면이 없으면 발행해도 폐기
         hub.publish(new Event.ClientConnected(1, "peer"));
 
         EventBuffer screen = hub.subscribe();
@@ -36,7 +36,7 @@ class EventHubTest {
     }
 
     @Test
-    @DisplayName("화면이 둘이면 같은 사건이 양쪽에 똑같은 순번으로 간다")
+    @DisplayName("화면이 둘이면 같은 사건을 양쪽에 같은 순번으로 전달")
     void fansOutToEveryScreen() {
         EventBuffer first = hub.subscribe();
         EventBuffer second = hub.subscribe();
@@ -51,7 +51,7 @@ class EventHubTest {
     }
 
     @Test
-    @DisplayName("구독을 끊은 화면에는 더 보내지 않는다")
+    @DisplayName("구독 해제한 화면에는 전송 중단")
     void stopsSendingAfterUnsubscribe() {
         EventBuffer screen = hub.subscribe();
         hub.unsubscribe(screen);
@@ -63,7 +63,7 @@ class EventHubTest {
     }
 
     @Test
-    @DisplayName("여러 스레드가 동시에 발행해도 순번이 겹치지 않는다")
+    @DisplayName("여러 스레드 동시 발행에도 순번 중복 없음")
     void numbersEventsSafelyFromManyThreads() throws Exception {
         int threads = 50;
         int perThread = 100;
@@ -84,7 +84,7 @@ class EventHubTest {
             }
         }
 
-        // 버퍼 용량(1024)보다 훨씬 많이 넣었으므로 대부분은 버려진다. 남은 것의 순번만 확인한다.
+        // 버퍼 용량(1024) 초과로 대부분 폐기 - 남은 것의 순번만 확인
         Set<Long> seen = new HashSet<>();
         for (EventRecord record : screen.drain(threads * perThread)) {
             assertTrue(seen.add(record.sequence()), "같은 순번이 두 번 나왔다: " + record.sequence());

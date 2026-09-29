@@ -7,21 +7,12 @@ import glassredis.server.RedisServer;
 
 import java.io.IOException;
 
-/**
- * 진입점. 인자를 파싱해서 서버를 띄운다.
- */
 public final class Main {
 
-    /**
-     * 진짜 Redis 의 기본 포트는 6379 다. 같은 기계에 진짜 Redis 가 떠 있어도 부딪히지 않도록
-     * 하나 옆인 6380 을 쓴다.
-     */
+    /** 6380 - 로컬 Redis 6379와 충돌 회피 */
     private static final int DEFAULT_PORT = 6380;
 
-    /**
-     * 기본은 루프백만 연다. 외부에 노출되지 않고 윈도우 방화벽 팝업도 뜨지 않는다.
-     * 도커 컨테이너 안의 redis-cli 로 붙어볼 때만 {@code --bind 0.0.0.0} 으로 띄운다.
-     */
+    /** 루프백 - 방화벽 팝업 회피, 도커 접속 시에만 --bind 0.0.0.0 */
     private static final String DEFAULT_BIND = "127.0.0.1";
 
     public static void main(String[] args) throws Exception {
@@ -51,8 +42,7 @@ public final class Main {
 
         CommandRegistry registry = CommandRegistry.withBuiltins();
 
-        // 관측은 여기 하나로 모인다. 대시보드를 띄우지 않으면 아무도 구독하지 않으므로
-        // 서버는 이벤트를 만들지도 않는다.
+        // 구독자 없으면 이벤트 생성 생략
         EventHub events = new EventHub();
 
         RedisServer server = new RedisServer(bind, port, registry, events);
@@ -65,7 +55,6 @@ public final class Main {
 
         DashboardServer dashboardServer = dashboard ? startDashboard(bind, dashboardPort, events, server) : null;
 
-        // Ctrl+C 로 종료할 때 소켓을 정리한다.
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (dashboardServer != null) {
                 dashboardServer.close();
@@ -75,10 +64,7 @@ public final class Main {
         server.awaitStop();
     }
 
-    /**
-     * 대시보드는 있으면 좋은 것이지 Redis 가 도는 조건이 아니다. 그래서 포트가 이미 쓰이고 있어도
-     * 서버를 내리지 않고 경고만 남긴 뒤 계속 간다.
-     */
+    /** 대시보드 기동 실패 시 서버 유지 - 경고만 출력 */
     private static DashboardServer startDashboard(String bind, int port, EventHub events, RedisServer server) {
         DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot,
                 server::sortedSetSnapshot);

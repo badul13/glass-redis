@@ -10,10 +10,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/**
- * {@code HDEL key field [field ...]} — 필드를 지우고, 실제로 지운 수를 준다.
- * 마지막 필드가 지워지면 키째로 사라진다.
- */
+/** HDEL key field [field ...] - 비면 키 삭제 */
 public final class HdelCommand implements Command {
 
     @Override

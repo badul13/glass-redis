@@ -1,4 +1,4 @@
-/* 어두운 배경에 데이터는 고정폭. 터미널에서 벌어지는 일을 화면으로 옮긴 것이므로 그 느낌을 유지한다. */
+/* 터미널 느낌 - 어두운 배경 + 고정폭 데이터 */
 
 :root {
   --bg: #0e1113;
@@ -317,7 +317,7 @@ table.keys td.type {
   font-size: 11px;
 }
 
-/* 자료형마다 색을 달리해 목록에서 한눈에 갈리게 한다. 문자열은 가장 흔하므로 제일 흐리게. */
+/* 자료형별 색 - 가장 흔한 문자열은 흐리게 */
 table.keys .type-string {
   color: var(--faint);
 }
@@ -616,7 +616,7 @@ table.keys tr.selected {
   fill: transparent;
 }
 
-/* 새로 들어왔거나 점수가 바뀐 노드는 한 번 반짝인다. 순위표에서 자리를 옮긴 게 눈에 띄게. */
+/* 새로 들어왔거나 점수가 바뀐 노드 1회 강조 */
 .skiplist-svg .node.fresh .box {
   animation: fresh 1.2s ease-out;
 }
@@ -628,14 +628,13 @@ table.keys tr.selected {
   }
 }
 
-/* 키 목록의 인코딩 이름. 자료형 바로 뒤에 흐리게. */
 table.keys td.type .encoding {
   margin-left: 6px;
   color: var(--faint);
   font-size: 10px;
 }
 
-/* listpack — 바이트 배열 한 줄 */
+/* listpack */
 
 .listpack-strip {
   display: flex;

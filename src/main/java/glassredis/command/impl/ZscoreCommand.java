@@ -11,12 +11,7 @@ import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
-/**
- * {@code ZSCORE key member} — 멤버의 점수. 없으면 nil.
- *
- * <p>점수는 정수가 아니라 문자열(벌크 문자열)로 나간다. RESP2 에는 실수 타입이 없다.
- * 모양은 {@link Numbers#formatDouble} 을 따른다.
- */
+/** ZSCORE key member - 점수는 벌크 문자열, 없으면 nil */
 public final class ZscoreCommand implements Command {
 
     @Override

@@ -9,11 +9,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/**
- * {@code TYPE key} — 값의 자료형 이름. 키가 없으면 {@code none}.
- *
- * <p>응답은 벌크 문자열이 아니라 단순 문자열({@code +string})이다. 실제 Redis 가 그렇게 준다.
- */
+/** TYPE key - 자료형 이름은 단순 문자열, 키 없으면 none */
 public final class TypeCommand implements Command {
 
     private static final RespValue NONE = new RespValue.SimpleString("none");

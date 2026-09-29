@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NumbersTest {
 
     @Test
-    @DisplayName("평범한 정수와 long 범위의 양 끝을 읽는다")
+    @DisplayName("평범한 정수와 long 범위 양 끝 파싱")
     void parsesValidIntegers() {
         assertEquals(OptionalLong.of(0), parse("0"));
         assertEquals(OptionalLong.of(42), parse("42"));
@@ -23,7 +23,7 @@ class NumbersTest {
     }
 
     @Test
-    @DisplayName("Redis 가 정수로 보지 않는 표기는 거절한다")
+    @DisplayName("Redis 가 정수로 보지 않는 표기는 거절")
     void rejectsNonCanonicalOrOutOfRange() {
         String[] rejected = {
                 "", "-", "+5", "007", "-0", "1.5", " 1", "1 ", "12a",
@@ -35,7 +35,7 @@ class NumbersTest {
     }
 
     @Test
-    @DisplayName("점수는 strtod 처럼 읽는다 — inf 표기를 받고, 공백·자바 접미사·NaN·범위 초과는 거절한다")
+    @DisplayName("점수는 strtod 방식으로 파싱 - inf 표기 허용, 공백·자바 접미사·NaN·범위 초과는 거절")
     void parsesScores() {
         assertEquals(OptionalDouble.of(1.5), parseScore("1.5"));
         assertEquals(OptionalDouble.of(-3), parseScore("-3"));
@@ -54,9 +54,9 @@ class NumbersTest {
     }
 
     @Test
-    @DisplayName("점수는 실제 Redis 7.4 와 같은 모양으로 쓴다")
+    @DisplayName("점수 출력 형식은 실제 Redis 7.4 와 동일")
     void formatsScores() {
-        // 기대값은 전부 실제 Redis 7.4 에 같은 값을 ZADD 하고 ZSCORE 로 받아 본 것이다.
+        // 기대값 - 실제 Redis 7.4 에서 ZADD 후 ZSCORE 로 받은 값
         String[][] cases = {
                 {"3", "3"}, {"-3", "-3"}, {"-0.0", "0"}, {"0.1", "0.1"}, {"123456.789", "123456.789"},
                 {"0.00001", "0.00001"}, {"0.000001", "0.000001"}, {"-0.000001", "-0.000001"},

@@ -11,10 +11,7 @@ import glassredis.store.SetValue;
 
 import java.util.List;
 
-/**
- * {@code SADD key member [member ...]} — 원소를 넣고, 새로 들어간 수를 준다.
- * 이미 있던 원소는 세지 않는다. 키가 없으면 새 Set 을 만든다.
- */
+/** SADD key member [member ...] - 새로 추가된 수 */
 public final class SaddCommand implements Command {
 
     @Override
@@ -33,7 +30,7 @@ public final class SaddCommand implements Command {
 
         SetValue set;
         if (entry == null) {
-            // 첫 원소와 넣을 개수로 처음 모양을 고른다. 정수로 시작하면 intset 이다.
+            // 첫 원소와 삽입 개수로 초기 인코딩 선택
             set = SetValue.create(args.get(1), args.size() - 1);
             keyspace.put(key, Entry.of(set));
         } else if (entry.value() instanceof SetValue existing) {

@@ -8,11 +8,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/**
- * {@code DEL key [key ...]} — 키를 지우고, 실제로 지운 개수를 돌려준다.
- *
- * <p>원래 없던 키는 세지 않는다. 그래서 응답만 보고도 "지웠다"와 "원래 없었다"를 구분할 수 있다.
- */
+/** DEL key [key ...] - 실제 삭제 개수 */
 public final class DelCommand implements Command {
 
     @Override

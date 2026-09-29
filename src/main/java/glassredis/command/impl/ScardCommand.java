@@ -10,7 +10,7 @@ import glassredis.store.SetValue;
 
 import java.util.List;
 
-/** {@code SCARD key} — 원소 수. 키가 없으면 0. */
+/** SCARD key - 키 없으면 0 */
 public final class ScardCommand implements Command {
 
     @Override

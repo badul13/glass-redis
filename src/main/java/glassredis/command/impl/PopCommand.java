@@ -14,16 +14,9 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * {@code LPOP key [count]} / {@code RPOP key [count]} — List 의 앞 또는 뒤에서 꺼낸다.
- *
- * <p>{@code count} 를 주느냐에 따라 응답 모양이 다르다. 안 주면 원소 하나(벌크 문자열),
- * 주면 배열이다. {@code count} 가 1 이어도 배열이다.
- *
- * <p>마지막 원소를 꺼내면 키째로 사라진다. Redis 에는 "빈 List" 라는 상태가 없다 —
- * 원소가 0 개가 되는 순간 키가 지워지고, 다음 {@code PUSH} 가 새로 만든다.
- *
- * <p>없는 키에 {@code count} 를 주면 실제 Redis 는 널 배열({@code *-1})을 준다.
- * 여기에는 널 배열 타입이 없어 널 벌크 문자열을 준다. redis-cli 에서는 둘 다 {@code (nil)} 로 보인다.
+ * LPOP/RPOP key [count]
+ * count 지정 시 1이어도 배열 응답, 비면 키 삭제
+ * 없는 키 + count - 널 배열 대신 널 벌크 문자열 (Redis와 차이)
  */
 public final class PopCommand implements Command {
 

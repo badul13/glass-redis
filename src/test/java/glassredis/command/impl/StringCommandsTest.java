@@ -9,7 +9,7 @@ import static glassredis.command.impl.CommandTester.error;
 import static glassredis.command.impl.CommandTester.integer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 만료와 상관없는 문자열 명령들. 만료 쪽은 {@link ExpireCommandsTest}. */
+/** 만료 관련은 {@link ExpireCommandsTest} 참고 */
 class StringCommandsTest {
 
     private final CommandTester tester = new CommandTester();
@@ -17,14 +17,14 @@ class StringCommandsTest {
     // --- GET / SET / DEL / EXISTS ---
 
     @Test
-    @DisplayName("SET 한 값을 GET 으로 읽는다")
+    @DisplayName("SET 후 GET 조회")
     void setThenGet() {
         assertEquals(RespValue.OK, run("SET", "k", "v"));
         assertEquals(bulk("v"), run("GET", "k"));
     }
 
     @Test
-    @DisplayName("없는 키의 GET 은 nil 이고, 빈 문자열 값과는 다르다")
+    @DisplayName("없는 키의 GET 은 nil - 빈 문자열 값과 구별")
     void getMissingIsNilNotEmpty() {
         assertEquals(RespValue.NIL, run("GET", "missing"));
 
@@ -33,7 +33,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("SET 은 기존 값을 덮어쓴다")
+    @DisplayName("SET - 기존 값 덮어쓰기")
     void setOverwrites() {
         run("SET", "k", "old");
         run("SET", "k", "new");
@@ -41,7 +41,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("DEL 은 실제로 지운 개수만 센다")
+    @DisplayName("DEL - 실제로 지운 개수만 집계")
     void delCountsOnlyExistingKeys() {
         run("SET", "a", "1");
         run("SET", "b", "2");
@@ -51,7 +51,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("EXISTS 는 같은 키를 여러 번 적으면 여러 번 센다")
+    @DisplayName("EXISTS - 같은 키를 여러 번 적으면 그 횟수만큼 집계")
     void existsCountsDuplicates() {
         run("SET", "k", "v");
 
@@ -59,7 +59,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("TYPE 은 문자열에 string, 없는 키에 none 을 준다")
+    @DisplayName("TYPE - 문자열은 string, 없는 키는 none")
     void type() {
         run("SET", "k", "v");
 
@@ -68,7 +68,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("인자 개수가 틀리면 에러를 준다")
+    @DisplayName("인자 개수 오류 시 에러")
     void wrongArity() {
         assertEquals(error("ERR wrong number of arguments for 'get' command"), run("GET"));
         assertEquals(error("ERR wrong number of arguments for 'set' command"), run("SET", "k"));
@@ -80,7 +80,7 @@ class StringCommandsTest {
     // --- SET 옵션 (만료 제외) ---
 
     @Test
-    @DisplayName("SET NX 는 키가 없을 때만 쓰고, 못 썼으면 nil 을 준다")
+    @DisplayName("SET NX - 키가 없을 때만 쓰기, 못 쓰면 nil")
     void setNx() {
         assertEquals(RespValue.OK, run("SET", "k", "first", "NX"));
         assertEquals(RespValue.NIL, run("SET", "k", "second", "nx"));
@@ -88,7 +88,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("SET XX 는 키가 있을 때만 쓴다")
+    @DisplayName("SET XX - 키가 있을 때만 쓰기")
     void setXx() {
         assertEquals(RespValue.NIL, run("SET", "k", "v", "XX"));
         assertEquals(RespValue.NIL, run("GET", "k"));
@@ -99,7 +99,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("SET GET 은 OK 대신 쓰기 전의 값을 준다. NX 로 못 썼어도 기존 값은 준다")
+    @DisplayName("SET GET - OK 대신 쓰기 전 값 응답, NX 로 못 써도 기존 값 응답")
     void setGet() {
         assertEquals(RespValue.NIL, run("SET", "k", "v1", "GET"));
         assertEquals(bulk("v1"), run("SET", "k", "v2", "GET"));
@@ -108,7 +108,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("SET 옵션이 서로 부딪히거나 모르는 옵션이면 syntax error, 키는 건드리지 않는다")
+    @DisplayName("SET 옵션 충돌이나 모르는 옵션이면 syntax error - 키는 그대로")
     void setSyntaxErrors() {
         assertEquals(error("ERR syntax error"), run("SET", "k", "v", "NX", "XX"));
         assertEquals(error("ERR syntax error"), run("SET", "k", "v", "BOGUS"));
@@ -116,7 +116,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("같은 SET 옵션을 두 번 주는 건 허용한다")
+    @DisplayName("같은 SET 옵션 중복 허용")
     void setRepeatedOptions() {
         assertEquals(RespValue.OK, run("SET", "k", "v", "NX", "nx"));
         assertEquals(bulk("v"), run("SET", "k", "v2", "GET", "GET"));
@@ -126,7 +126,7 @@ class StringCommandsTest {
     // --- INCR 계열 ---
 
     @Test
-    @DisplayName("INCR 은 없는 키를 0 으로 보고 시작하며, 결과를 문자열로 저장한다")
+    @DisplayName("INCR - 없는 키는 0 에서 시작, 결과는 문자열로 저장")
     void incrStartsFromZero() {
         assertEquals(integer(1), run("INCR", "n"));
         assertEquals(integer(2), run("INCR", "n"));
@@ -134,7 +134,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("DECR, INCRBY, DECRBY 는 음수 결과도 그대로 다룬다")
+    @DisplayName("DECR, INCRBY, DECRBY - 음수 결과도 그대로 처리")
     void otherIncrements() {
         assertEquals(integer(-1), run("DECR", "n"));
         assertEquals(integer(9), run("INCRBY", "n", "10"));
@@ -143,7 +143,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("값이나 증가량이 정수가 아니면 에러를 주고 값은 그대로 둔다")
+    @DisplayName("값이나 증가량이 정수가 아니면 에러 - 값은 그대로")
     void incrOnNonInteger() {
         run("SET", "word", "hello");
         run("SET", "padded", "007");
@@ -155,7 +155,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("long 범위를 넘으면 오버플로 에러를 주고 값은 그대로 둔다")
+    @DisplayName("long 범위 초과 시 오버플로 에러 - 값은 그대로")
     void incrOverflow() {
         run("SET", "max", "9223372036854775807");
 
@@ -167,7 +167,7 @@ class StringCommandsTest {
     // --- MGET / MSET / APPEND / STRLEN ---
 
     @Test
-    @DisplayName("MSET 으로 쓴 값을 MGET 으로 읽고, 없는 키 자리에는 nil 이 들어간다")
+    @DisplayName("MSET 후 MGET 조회 - 없는 키 자리는 nil")
     void msetAndMget() {
         assertEquals(RespValue.OK, run("MSET", "a", "1", "b", "2"));
 
@@ -175,7 +175,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("APPEND 는 없는 키를 새로 만들고, 있으면 이어 붙여 길이를 준다")
+    @DisplayName("APPEND - 없는 키는 새로 생성, 있으면 이어 붙인 뒤 길이 응답")
     void append() {
         assertEquals(integer(5), run("APPEND", "k", "hello"));
         assertEquals(integer(11), run("APPEND", "k", " world"));
@@ -183,7 +183,7 @@ class StringCommandsTest {
     }
 
     @Test
-    @DisplayName("STRLEN 은 문자 수가 아니라 바이트 수를 주고, 없는 키는 0 이다")
+    @DisplayName("STRLEN - 문자 수가 아닌 바이트 수, 없는 키는 0")
     void strlen() {
         run("SET", "k", "한글");
 

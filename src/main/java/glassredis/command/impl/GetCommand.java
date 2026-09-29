@@ -10,12 +10,7 @@ import glassredis.store.StringValue;
 
 import java.util.List;
 
-/**
- * {@code GET key} — 값을 돌려준다. 키가 없으면 nil.
- *
- * <p>"키가 없음"(nil, {@code $-1}) 과 "값이 빈 문자열"({@code $0}) 은 다른 응답이다.
- * {@code SET k ""} 을 한 뒤의 {@code GET k} 는 nil 이 아니라 빈 문자열을 줘야 한다.
- */
+/** GET key - 키 없으면 nil */
 public final class GetCommand implements Command {
 
     @Override

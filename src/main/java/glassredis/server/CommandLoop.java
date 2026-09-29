@@ -20,69 +20,47 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
- * 모든 명령을 스레드 하나에서 차례로 실행한다.
- *
- * <p>커넥션 스레드는 수천 개일 수 있지만 명령을 실행하는 스레드는 이 하나뿐이다.
- * 커넥션 스레드는 명령을 큐에 넣고 답이 채워질 때까지 기다리고,
- * 실행 스레드는 큐에서 하나씩 꺼내 실행한다.
+ * 모든 명령을 실행 스레드 하나에서 순차 실행
+ * 키스페이스는 이 스레드 전용 - 락 없음
+ * 커넥션 스레드는 큐 투입 후 응답 대기, 소켓 입출력도 커넥션 스레드 담당
  *
  * <pre>
- *   커넥션 스레드 ─┐
- *   커넥션 스레드 ─┼─▶ 큐 ─▶ 실행 스레드 ─▶ Command.execute()
- *   커넥션 스레드 ─┤
- *   주기 타이머  ──┘  (100ms 마다 serverCron 작업을 넣음)
+ *   커넥션 스레드들 ─┐
+ *   주기 타이머  ────┴─▶ 큐 ─▶ 실행 스레드
  * </pre>
  *
- * <p>이렇게 하면 데이터를 만지는 스레드가 하나로 고정된다. 해시 테이블에 락이 하나도 없어도 되고,
- * "읽고, 고치고, 쓰는" 명령({@code INCR} 등)의 중간에 다른 명령이 끼어들 틈이 없다.
- * 실제 Redis 도 명령 실행은 스레드 하나에서 한다.
- *
- * <p>소켓 입출력은 여기서 하지 않는다. 느린 클라이언트 하나에 쓰다가 막히면
- * 뒤에 줄 선 모든 명령이 같이 멈추기 때문이다. 응답을 쓰는 건 각 커넥션 스레드의 몫이다.
- *
- * <p>실행 스레드는 가상 스레드가 아니라 플랫폼 스레드다. 가상 스레드는 기다리는 일이 많을 때
- * OS 스레드를 반납해서 이득을 보는데, 이 스레드는 쉬지 않고 계산만 하므로 얻을 게 없다.
+ * <p>실행 스레드는 플랫폼 스레드 - 계산만 하므로 가상 스레드 불필요
  */
 final class CommandLoop implements AutoCloseable {
 
-    /** 주기 작업을 1초에 몇 번 돌릴지. 실제 Redis 설정 {@code hz} 의 기본값과 같다. */
+    /** Redis hz 기본값 */
     private static final int HZ = ActiveExpireCycle.HZ;
 
-    /**
-     * 크기 제한이 없는 큐를 쓴다. 제한이 없어도 무한정 쌓이지는 않는다 —
-     * 커넥션은 응답을 받기 전까지 다음 명령을 넣지 않고, 주기 작업은 한 번에 하나만 넣는다.
-     * 그래서 큐에 동시에 들어 있는 작업은 많아야 "커넥션 수 + 1" 개다.
-     */
+    /** 무제한 큐 - 커넥션당 명령 1개 + 주기 작업 1개라 최대 커넥션 수 + 1 */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
 
     private final Thread thread = Thread.ofPlatform().name("glass-redis-executor").unstarted(this::runLoop);
 
-    /**
-     * 주기 작업의 박자를 재는 타이머. 시간만 재고 작업은 큐에 넣기만 한다.
-     * 타이머 스레드가 키스페이스를 직접 만지면 "실행 스레드만 만진다"는 전제가 깨진다.
-     */
+    /** 박자 전용 - 키스페이스 직접 접근 금지, 작업은 큐 투입만 */
     private final ScheduledExecutorService cronTimer = Executors.newSingleThreadScheduledExecutor(
             Thread.ofPlatform().name("glass-redis-cron-timer").daemon(true).factory());
 
-    /** 주기 작업이 이미 큐에서 기다리는 중인지. 실행 스레드가 밀려 있을 때 같은 작업이 줄줄이 쌓이지 않게 한다. */
+    /** 실행 스레드 지연 시 주기 작업 중복 적재 방지 */
     private final AtomicBoolean cronQueued = new AtomicBoolean();
 
-    /** 명령에 넘기는 서버 상태. 안에 든 키스페이스는 이 클래스의 실행 스레드만 만진다. */
+    /** 내부 키스페이스는 실행 스레드 전용 */
     private final Context context;
 
     private final ActiveExpireCycle activeExpire;
 
-    /** 실행한 명령을 알릴 곳. 관측이 꺼져 있으면 시간을 재지도 않는다. */
     private final EventBus events;
 
-    /** 실행 스레드가 더 이상 돌 수 없게 됐을 때 부른다. 서버는 여기에 자기 종료를 걸어둔다. */
+    /** 실행 스레드 사망 시 호출 - 서버 종료로 연결 */
     private final Runnable onFatalError;
 
     private volatile boolean running;
 
-    /**
-     * @param keyspace 넘긴 뒤로는 실행 스레드만 만져야 한다. {@link #start()} 전에 채워 넣는 것까지는 괜찮다.
-     */
+    /** @param keyspace start() 이후 실행 스레드 전용 */
     CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
         this.context = new Context(keyspace);
         this.events = events;
@@ -97,15 +75,7 @@ final class CommandLoop implements AutoCloseable {
         cronTimer.scheduleAtFixedRate(this::requestCron, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * 명령을 큐에 넣고 즉시 반환한다. 실행 결과는 돌려준 future 에 채워진다.
-     *
-     * <p>호출한 가상 스레드가 {@code get()} 으로 기다리는 동안에는 바탕의 OS 스레드를 반납한다.
-     * 그래서 커넥션 수천 개가 동시에 기다리고 있어도 OS 스레드는 몇 개 쓰지 않는다.
-     *
-     * @param connectionId 이 명령을 보낸 커넥션. 실행 자체에는 쓰이지 않고, 대시보드의 명령 스트림에서
-     *                     누가 보낸 명령인지를 보여주는 데만 쓴다.
-     */
+    /** @param connectionId 이벤트 표시용 - 실행과 무관 */
     CompletableFuture<RespValue> submit(Command command, List<byte[]> args, long connectionId) {
         CompletableFuture<RespValue> reply = new CompletableFuture<>();
         queue.add(() -> reply.complete(execute(command, args, connectionId)));
@@ -113,16 +83,10 @@ final class CommandLoop implements AutoCloseable {
     }
 
     /**
-     * 실행 스레드에서 키스페이스를 읽어 온다. 대시보드의 키 목록과 스킵 리스트 그림이 이걸로 뜬다.
+     * 대시보드용 키스페이스 읽기 - 실행 스레드에서 수행
+     * 명령과 같은 큐 - 중간 상태 노출 없음
      *
-     * <p>화면을 그리려면 키스페이스를 읽어야 하는데, 그건 실행 스레드만 할 수 있는 일이다.
-     * 그래서 HTTP 스레드가 직접 읽지 않고 여기에 작업을 맡긴다. 명령과 같은 큐에 줄을 서므로
-     * 명령이 반쯤 실행된 중간 상태가 찍히는 일도 없다.
-     *
-     * <p>이걸 {@code KEYS} 같은 진짜 명령으로 만들지 않은 이유는, redis-cli 에 내보낼 것도 아니고
-     * 응답이 RESP 여야 할 이유도 없어서다.
-     *
-     * @param reader 읽기만 해야 한다. 여기서 키스페이스를 고치면 명령을 거치지 않은 변경이 생긴다.
+     * @param reader 읽기 전용
      */
     <T> CompletableFuture<T> inspect(Function<Keyspace, T> reader) {
         CompletableFuture<T> result = new CompletableFuture<>();
@@ -131,20 +95,17 @@ final class CommandLoop implements AutoCloseable {
     }
 
     /**
-     * 실행 스레드를 멈춘다.
-     *
-     * <p>큐에 남은 명령의 future 는 채워지지 않는다. 그걸 기다리던 커넥션 스레드는
-     * {@link RedisServer#close()} 가 커넥션 스레드들을 인터럽트할 때 풀려난다.
+     * 큐에 남은 future는 미완료로 방치
+     * 대기 중 커넥션 스레드는 RedisServer.close()의 인터럽트로 해제
      */
     @Override
     public void close() {
         running = false;
         cronTimer.shutdownNow();
-        // take() 에서 기다리는 중이라면 인터럽트로 깨운다.
         thread.interrupt();
     }
 
-    /** 타이머 스레드에서 불린다. */
+    /** 타이머 스레드에서 호출 */
     private void requestCron() {
         if (cronQueued.compareAndSet(false, true)) {
             queue.add(() -> {
@@ -155,13 +116,8 @@ final class CommandLoop implements AutoCloseable {
     }
 
     /**
-     * 1초에 10번 도는 주기 작업. 실제 Redis 의 serverCron → databasesCron 중 키스페이스에 관한 부분이다.
-     * <ol>
-     *   <li>SLOW 주기적 만료 — 만료된 키 청소의 본체.</li>
-     *   <li>너무 비어 버린 해시 테이블 줄이기.</li>
-     *   <li>옮기는 중인 해시 테이블을 1ms 밀어주기. 옮기기는 원래 명령이 올 때마다 한 칸씩 하는데,
-     *       명령이 뜸하면 한없이 늘어지므로 여기서 거든다.</li>
-     * </ol>
+     * SLOW 만료 + 해시 테이블 축소 + 1ms 리해시 - serverCron, databasesCron
+     * 리해시도 여기서 진행 - 명령이 뜸할 때 지연 방지
      */
     private void serverCron() {
         Keyspace keyspace = context.keyspace();
@@ -173,21 +129,16 @@ final class CommandLoop implements AutoCloseable {
     private void runLoop() {
         while (running) {
             try {
-                // 큐가 비었다 = 곧 잠든다. 실제 Redis 가 이벤트 루프에서 잠들기 직전(beforeSleep)에 FAST 만료를
-                // 돌리는 자리를 여기로 흉내 낸다. 할 일이 없어 보이면 FAST 는 스스로 바로 돌아온다.
+                // 큐가 비면 곧 대기 - FAST 만료 실행(beforeSleep)
                 if (queue.isEmpty()) {
                     activeExpire.run(ActiveExpireCycle.Kind.FAST);
                 }
                 queue.take().run();
             } catch (InterruptedException e) {
-                return; // close() 가 깨웠다
+                return; // close()
             } catch (Throwable fatal) {
-                // 명령의 RuntimeException 은 execute() 가 이미 응답으로 바꿨다. 여기까지 오는 건 Error 이거나,
-                // 명령이 아닌 내부 작업(주기 작업, 만료 청소)이 던진 예외다. 어느 쪽이든 JVM 이나 데이터 상태를 믿을 수 없다.
-                //
-                // 그렇다고 이 스레드만 조용히 끝나면 더 나쁘다. 큐를 꺼낼 스레드가 없어져서
-                // 모든 클라이언트가 답을 영원히 기다리는데, 프로세스와 포트는 살아 있어 밖에서 알아채기 어렵다.
-                // 그래서 서버 전체를 내린다. 실제 Redis 도 내부 버그를 만나면 버그 리포트를 남기고 종료한다.
+                // Error 또는 내부 작업 예외 - 상태 신뢰 불가
+                // 이 스레드만 죽으면 모든 클라이언트 무한 대기 - 서버 전체 종료
                 System.err.println("[glass-redis] 실행 스레드에서 치명적 오류가 발생해 서버를 종료합니다");
                 fatal.printStackTrace();
                 onFatalError.run();
@@ -197,21 +148,19 @@ final class CommandLoop implements AutoCloseable {
     }
 
     private RespValue execute(Command command, List<byte[]> args, long connectionId) {
-        // 관측이 꺼져 있으면 시계를 읽지 않는다. System.nanoTime() 은 공짜가 아니라서,
-        // 명령 하나가 수백 ns 로 끝나는 구간에서는 이것만으로도 측정값이 흔들린다.
+        // 관측 꺼짐 시 nanoTime() 비용도 생략
         long startNanos = events.enabled() ? System.nanoTime() : 0;
 
         RespValue reply;
         try {
             reply = command.execute(context, args);
         } catch (RuntimeException e) {
-            // 명령 구현의 버그는 그 명령의 에러 응답으로 끝낸다. 실행 스레드는 계속 돈다.
+            // 명령 버그는 에러 응답 처리 - 실행 스레드 유지
             log("명령 %s 처리 중 예외: %s", command.name(), e);
             reply = Errors.internal(e.getClass().getSimpleName());
         }
 
         if (events.enabled()) {
-            // 실패한 명령도 그대로 알린다. 무엇이 왜 실패했는지가 화면에서 제일 보고 싶은 것 중 하나다.
             events.publish(Event.command(connectionId, command.name(), args, System.nanoTime() - startNanos, reply));
         }
         return reply;

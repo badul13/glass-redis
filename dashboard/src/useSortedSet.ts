@@ -3,16 +3,11 @@ import type { Score, SortedSetSnapshot } from './types'
 
 export interface SortedSetState {
   snapshot: SortedSetSnapshot
-  /** 직전 모양과 비교해 새로 들어왔거나 점수가 바뀐 멤버. 화면에서 반짝이게 한다. */
+  /** 직전 스냅샷 대비 새로 들어왔거나 점수가 바뀐 멤버 */
   changed: Set<string>
 }
 
-/**
- * 고른 Sorted Set 하나의 스킵 리스트 모양을 받아 온다.
- *
- * <p>키 목록과 달리 키를 골랐을 때만 필요해서 연결을 따로 연다. 다른 키를 고르면 이 연결을 닫고 새로 연다.
- * 서버는 모양이 바뀔 때만 보내므로, 메시지가 왔다는 것 자체가 "뭔가 바뀌었다"는 뜻이다.
- */
+/** 키 선택마다 새 연결 - 서버는 변경 시에만 전송 */
 export function useSortedSet(key: string | null): SortedSetState | null {
   const [state, setState] = useState<SortedSetState | null>(null)
 
@@ -20,7 +15,7 @@ export function useSortedSet(key: string | null): SortedSetState | null {
     if (key === null) {
       return
     }
-    // 처음 받은 모양에서는 아무것도 반짝이지 않게, 이전 모양이 없다는 걸 null 로 구분한다.
+    // null이면 첫 스냅샷 - 강조 없음
     let previous: Map<string, Score> | null = null
     const source = new EventSource('/api/zset?key=' + encodeURIComponent(key))
 

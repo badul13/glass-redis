@@ -10,7 +10,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/** {@code HLEN key} — 필드 수. 키가 없으면 0. */
+/** HLEN key - 키 없으면 0 */
 public final class HlenCommand implements Command {
 
     @Override

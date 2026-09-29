@@ -12,13 +12,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code HGETALL key} / {@code HKEYS key} / {@code HVALS key} — Hash 전체를 훑는다. 키가 없으면 빈 배열.
- *
- * <p>{@code HGETALL} 은 맵이 아니라 {@code [필드1, 값1, 필드2, 값2, ...]} 로 펼친 배열이다.
- * RESP2 에는 맵 타입이 없어서다. 짝을 맞춰 읽는 건 클라이언트 몫이다.
- *
- * <p>순서는 인코딩을 따른다. listpack 이면 넣은 순서, hashtable 이면 버킷 순서라 서버를 켤 때마다 달라진다
- * (해시 씨앗이 매번 바뀐다). 실제 Redis 도 같다.
+ * HGETALL key, HKEYS key, HVALS key - 키 없으면 빈 배열
+ * HGETALL - 필드와 값을 번갈아 펼친 배열
+ * 순서 - listpack은 삽입 순, hashtable은 해시 씨앗 따라 기동마다 상이
  */
 public final class HgetallCommand implements Command {
 

@@ -10,7 +10,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/** {@code HEXISTS key field} — 필드가 있으면 1, 없으면 0. */
+/** HEXISTS key field */
 public final class HexistsCommand implements Command {
 
     @Override

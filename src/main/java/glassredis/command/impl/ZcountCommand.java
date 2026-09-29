@@ -12,12 +12,7 @@ import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
-/**
- * {@code ZCOUNT key min max} — 점수가 구간에 드는 멤버 수. 구간 표기는 {@link ScoreRanges}.
- *
- * <p>구간의 첫 멤버와 마지막 멤버의 순위 차로 센다. skiplist 면 하나씩 세지 않으므로 구간에 백만 개가 들어 있어도
- * O(log n) 이다. listpack(128개 이하)이면 훑는다.
- */
+/** ZCOUNT key min max - 구간 표기는 {@link ScoreRanges}, 양 끝 순위 차로 계산해 skiplist에서 O(log n) */
 public final class ZcountCommand implements Command {
 
     @Override

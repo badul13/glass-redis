@@ -26,15 +26,7 @@ import java.util.concurrent.Future;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * 진짜 소켓으로 서버와 대화해 본다.
- *
- * <p>이 PC 에는 redis-cli 가 없고 CI 에도 있으리라는 보장이 없다. 그래서 클라이언트 역할을
- * 테스트 코드가 직접 한다 — 바이트를 손으로 만들어 보내고 돌아온 바이트를 그대로 비교한다.
- * 덕분에 "실제로 프로토콜을 지키는가"를 외부 도구 없이 검증할 수 있다.
- *
- * <p>포트는 0 으로 연다. OS 가 비어 있는 포트를 골라주므로 다른 프로그램과 부딪히지 않는다.
- */
+/** redis-cli 없이 실제 소켓으로 바이트를 주고받아 확인 */
 @Timeout(10)
 class ServerSmokeTest {
 
@@ -52,7 +44,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("PING 에 +PONG 으로 답한다")
+    @DisplayName("PING 에 +PONG 응답")
     void ping() throws IOException {
         try (Client client = connect()) {
             assertEquals("+PONG", client.command("*1\r\n$4\r\nPING\r\n"));
@@ -60,7 +52,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("PING 에 인자를 주면 그 값을 벌크 문자열로 돌려준다")
+    @DisplayName("인자 있는 PING - 그 값을 벌크 문자열로 반환")
     void pingWithMessage() throws IOException {
         try (Client client = connect()) {
             client.send("*2\r\n$4\r\nPING\r\n$5\r\nhello\r\n");
@@ -70,7 +62,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("ECHO 는 받은 값을 그대로 돌려준다")
+    @DisplayName("ECHO - 받은 값 그대로 반환")
     void echo() throws IOException {
         try (Client client = connect()) {
             client.send("*2\r\n$4\r\nECHO\r\n$5\r\nworld\r\n");
@@ -80,7 +72,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("명령 이름의 대소문자를 가리지 않는다")
+    @DisplayName("명령 이름 대소문자 무시")
     void commandNamesAreCaseInsensitive() throws IOException {
         try (Client client = connect()) {
             assertEquals("+PONG", client.command("*1\r\n$4\r\nping\r\n"));
@@ -89,7 +81,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("인라인 명령도 받는다 (telnet 으로 칠 수 있다)")
+    @DisplayName("인라인 명령도 수용 (telnet 으로 입력 가능)")
     void inlineCommand() throws IOException {
         try (Client client = connect()) {
             assertEquals("+PONG", client.command("PING\r\n"));
@@ -97,17 +89,16 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("모르는 명령에는 에러를 주지만 커넥션은 유지한다")
+    @DisplayName("모르는 명령은 에러, 커넥션은 유지")
     void unknownCommandKeepsConnection() throws IOException {
         try (Client client = connect()) {
             assertEquals("-ERR unknown command 'NOPE', with args beginning with: ", client.command("NOPE\r\n"));
-            // 같은 커넥션에서 다음 명령이 계속 동작해야 한다
             assertEquals("+PONG", client.command("PING\r\n"));
         }
     }
 
     @Test
-    @DisplayName("인자 개수가 틀리면 에러를 주지만 커넥션은 유지한다")
+    @DisplayName("인자 개수 오류는 에러, 커넥션은 유지")
     void wrongArityKeepsConnection() throws IOException {
         try (Client client = connect()) {
             assertEquals("-ERR wrong number of arguments for 'echo' command", client.command("ECHO a b\r\n"));
@@ -116,7 +107,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("프로토콜이 깨지면 에러를 보내고 커넥션을 닫는다")
+    @DisplayName("프로토콜 오류 시 에러 전송 후 커넥션 종료")
     void protocolErrorClosesConnection() throws IOException {
         try (Client client = connect()) {
             String reply = client.command("*abc\r\n");
@@ -126,7 +117,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("파이프라이닝: 명령을 몰아서 보내면 응답도 순서대로 돌아온다")
+    @DisplayName("파이프라이닝 - 명령을 몰아서 보내도 응답은 순서대로")
     void pipelining() throws IOException {
         try (Client client = connect()) {
             client.send("*1\r\n$4\r\nPING\r\n*2\r\n$4\r\nECHO\r\n$2\r\nhi\r\n*1\r\n$4\r\nPING\r\n");
@@ -138,10 +129,10 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("바이너리 값이 왕복해도 한 바이트도 변하지 않는다")
+    @DisplayName("바이너리 값 왕복 시 바이트 변화 없음")
     void binaryRoundTrip() throws IOException {
         try (Client client = connect()) {
-            // 값 안에 CRLF 와 0x00 을 넣는다. 문자열로 다뤘다면 여기서 망가진다.
+            // 값에 CRLF 와 0x00 포함
             byte[] payload = {'a', '\r', '\n', 0x00, 'b'};
             ByteArrayOutputStream request = new ByteArrayOutputStream();
             request.write("*2\r\n$4\r\nECHO\r\n$5\r\n".getBytes(StandardCharsets.US_ASCII));
@@ -158,7 +149,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("QUIT 은 +OK 를 보낸 뒤 커넥션을 닫는다")
+    @DisplayName("QUIT - +OK 전송 후 커넥션 종료")
     void quit() throws IOException {
         try (Client client = connect()) {
             assertEquals("+OK", client.command("QUIT\r\n"));
@@ -167,7 +158,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("한 커넥션에서 SET 한 값을 다른 커넥션에서 GET 으로 읽는다")
+    @DisplayName("한 커넥션에서 SET 후 다른 커넥션에서 GET 조회")
     void setAndGetAcrossConnections() throws IOException {
         try (Client writer = connect(); Client reader = connect()) {
             assertEquals("+OK", writer.command("SET smoke:greeting hello\r\n"));
@@ -179,7 +170,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("SET 의 EX 옵션으로 건 만료 시간을 TTL 로 읽는다")
+    @DisplayName("SET EX 로 건 만료 시간을 TTL 로 조회")
     void setWithExpiryAndTtl() throws IOException {
         try (Client client = connect()) {
             assertEquals("+OK", client.command("SET smoke:ttl v EX 100\r\n"));
@@ -188,7 +179,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("여러 클라이언트가 같은 키에 동시에 INCR 해도 증가분이 하나도 사라지지 않는다")
+    @DisplayName("여러 클라이언트가 같은 키에 동시 INCR 해도 증가분 유실 없음")
     void concurrentIncrLosesNothing() throws Exception {
         int clients = 50;
         int incrementsPerClient = 1000;
@@ -222,7 +213,7 @@ class ServerSmokeTest {
     }
 
     @Test
-    @DisplayName("명령 실행 중 Error 가 나면 클라이언트를 멈춘 채 두지 않고 서버가 종료된다")
+    @DisplayName("명령 실행 중 Error 발생 시 클라이언트를 멈춘 채 두지 않고 서버 종료")
     void fatalErrorStopsServer() throws Exception {
         CommandRegistry registry = CommandRegistry.withBuiltins();
         registry.register(new Command() {
@@ -237,14 +228,14 @@ class ServerSmokeTest {
             }
         });
 
-        // 공유 서버를 죽이면 다른 테스트가 깨지므로 이 테스트만의 서버를 띄운다.
+        // 공유 서버를 죽이면 다른 테스트가 깨지므로 별도 기동
         try (RedisServer doomed = new RedisServer("127.0.0.1", 0, registry)) {
             doomed.start();
             try (Client client = new Client(doomed.port())) {
                 client.send("CRASH\r\n");
                 assertTrue(client.isClosedByServer(), "응답을 기다리며 멈추지 않고 커넥션이 끊겨야 한다");
             }
-            doomed.awaitStop(); // 서버가 멈추지 않았다면 @Timeout 에 걸린다
+            doomed.awaitStop(); // 서버가 멈추지 않으면 @Timeout 으로 실패
         }
     }
 
@@ -252,7 +243,6 @@ class ServerSmokeTest {
         return new Client(server.port());
     }
 
-    /** 테스트용 최소 클라이언트. 바이트를 직접 주고받는다. */
     private static final class Client implements AutoCloseable {
 
         private final Socket socket;
@@ -281,7 +271,7 @@ class ServerSmokeTest {
             out.flush();
         }
 
-        /** CRLF 까지 한 줄. 종결자는 빼고 준다. */
+        /** CRLF 를 뺀 한 줄 */
         String readLine() throws IOException {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             int b;
@@ -309,7 +299,6 @@ class ServerSmokeTest {
             return data;
         }
 
-        /** 서버가 자기 쪽에서 커넥션을 닫았는지. 닫혔다면 읽기가 EOF(-1) 를 준다. */
         boolean isClosedByServer() throws IOException {
             return in.read() == -1;
         }

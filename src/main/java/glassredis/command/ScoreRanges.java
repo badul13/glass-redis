@@ -5,23 +5,13 @@ import glassredis.store.ScoreRange;
 import java.util.Arrays;
 import java.util.OptionalDouble;
 
-/**
- * {@code ZRANGEBYSCORE}, {@code ZCOUNT} 가 받는 점수 구간 {@code min max} 를 읽는다.
- *
- * <p>기본은 양 끝을 포함한다. 앞에 {@code (} 를 붙이면 그 끝은 뺀다.
- * {@code -inf}, {@code +inf} 로 "끝까지"를 나타낸다.
- * <pre>
- *   ZCOUNT k 1 5          1 ≤ 점수 ≤ 5
- *   ZCOUNT k (1 5         1 &lt; 점수 ≤ 5
- *   ZCOUNT k -inf (5      점수 &lt; 5
- * </pre>
- */
+/** ZRANGEBYSCORE/ZCOUNT의 min max 파싱 - 기본 포함, ( 접두 시 제외 */
 public final class ScoreRanges {
 
     private ScoreRanges() {
     }
 
-    /** 둘 중 하나라도 실수가 아니면 {@code null}. */
+    /** 둘 중 하나라도 실수 아니면 null */
     public static ScoreRange parse(byte[] min, byte[] max) {
         boolean minExclusive = isExclusive(min);
         boolean maxExclusive = isExclusive(max);

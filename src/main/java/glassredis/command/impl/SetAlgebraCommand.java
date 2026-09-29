@@ -13,27 +13,12 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * {@code SMEMBERS key} / {@code SINTER key [key ...]} / {@code SUNION key [key ...]} / {@code SDIFF key [key ...]}
- * Redis 7.2 {@code t_set.c} 의 sinterGenericCommand, sunionDiffGenericCommand 를 따른다.
- *
- * <p>없는 키는 빈 Set 으로 친다. 계산을 시작하기 전에 모든 키의 자료형부터 확인한다 —
- * 앞쪽 키가 비어서 결과가 빈 게 뻔해도, 뒤쪽 키가 Set 이 아니면 WRONGTYPE 이다.
- *
- * <h2>결과 순서</h2>
- * 순서를 약속하지 않는 명령들이지만, 실제 Redis 가 내는 순서를 그대로 따른다. 계산 방식에서 나오는 순서라서다.
- * <ul>
- *   <li>{@code SINTER}, {@code SMEMBERS}: Set 들을 크기순으로 정렬하고 <b>가장 작은 Set</b> 을 훑으며 나머지에
- *       다 있는지 본다. 그래서 가장 작은 Set 의 순서가 결과 순서다.</li>
- *   <li>{@code SUNION}, {@code SDIFF}: 결과를 빈 intset 에서 시작하는 임시 Set 에 모았다가 그걸 훑는다.
- *       정수만 모이면 intset 이라 오름차순, 문자열이 섞이면 listpack(넣은 순서)이나 hashtable(버킷 순서)이다.</li>
- * </ul>
- *
- * <h2>SDIFF 의 두 알고리즘</h2>
- * <ol>
- *   <li>첫 Set 을 훑으며 나머지 어디에도 없는 것만 담는다. 비용 ≈ 첫 Set 크기 × Set 수.</li>
- *   <li>첫 Set 을 전부 담은 뒤 나머지 Set 의 원소를 하나씩 뺀다. 비용 ≈ 모든 Set 크기의 합.</li>
- * </ol>
- * 두 비용을 계산해서 고른다. 1번은 공통 원소가 있으면 일찍 끝나서 절반으로 쳐 준다.
+ * SMEMBERS key, SINTER/SUNION/SDIFF key [key ...]
+ * 기준 - Redis 7.2 t_set.c sinterGenericCommand, sunionDiffGenericCommand
+ * 없는 키는 빈 Set 취급, 계산 전 전체 키 자료형 확인 후 WRONGTYPE 우선
+ * 결과 순서 - Redis와 동일
+ * - SINTER는 가장 작은 Set 순서
+ * - SUNION/SDIFF는 빈 intset에서 시작한 임시 Set 순서
  */
 public final class SetAlgebraCommand implements Command {
 
@@ -49,7 +34,7 @@ public final class SetAlgebraCommand implements Command {
         this.singleKey = singleKey;
     }
 
-    /** 실제 Redis 에서도 SMEMBERS 는 키 하나짜리 SINTER 다. */
+    /** 키 하나짜리 SINTER로 처리 - Redis와 동일 */
     public static SetAlgebraCommand members() {
         return new SetAlgebraCommand("SMEMBERS", Operation.INTERSECTION, true);
     }
@@ -77,7 +62,7 @@ public final class SetAlgebraCommand implements Command {
             return Errors.wrongNumberOfArguments(name);
         }
 
-        // 없는 키는 null 로 둔다. 같은 키를 두 번 적으면 같은 객체가 두 번 들어간다.
+        // 없는 키는 null, 같은 키 반복 시 같은 객체
         List<SetValue> sets = new ArrayList<>(args.size());
         for (byte[] key : args) {
             Entry entry = ctx.keyspace().get(new Key(key));
@@ -109,7 +94,7 @@ public final class SetAlgebraCommand implements Command {
 
     private static void intersect(List<SetValue> sets, List<RespValue> items) {
         if (sets.contains(null)) {
-            return; // 빈 Set 과의 교집합은 늘 비어 있다
+            return;
         }
         List<SetValue> bySize = new ArrayList<>(sets);
         bySize.sort(Comparator.comparingInt(SetValue::size));
@@ -133,10 +118,11 @@ public final class SetAlgebraCommand implements Command {
         }
         for (int j = 1; j < sets.size(); j++) {
             if (sets.get(j) == first) {
-                return result; // 자기 자신을 빼면 늘 빈 결과다
+                return result; // 자기 자신 차감 시 빈 결과
             }
         }
 
+        // 두 알고리즘 비용 비교 후 선택 (Redis와 동일) - 1번은 조기 종료 가능성 때문에 절반으로 계산
         long algorithmOneWork = 0;
         long algorithmTwoWork = 0;
         for (SetValue set : sets) {
@@ -149,7 +135,7 @@ public final class SetAlgebraCommand implements Command {
 
         List<SetValue> others = new ArrayList<>(sets.subList(1, sets.size()));
         if (algorithmOneWork <= algorithmTwoWork) {
-            // 큰 Set 부터 보면 걸리는 원소를 빨리 찾을 가능성이 높다.
+            // 1번 - 첫 Set 순회하며 나머지에 없는 원소만 수집, 큰 Set부터 확인
             others.sort(Comparator.comparingInt((SetValue set) -> set == null ? 0 : set.size()).reversed());
             first.forEach(member -> {
                 for (SetValue other : others) {
@@ -162,6 +148,7 @@ public final class SetAlgebraCommand implements Command {
             return result;
         }
 
+        // 2번 - 첫 Set 복사 후 나머지 원소 제거
         first.forEach(result::add);
         for (SetValue other : others) {
             if (other == null) {

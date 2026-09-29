@@ -16,32 +16,13 @@ import java.util.Locale;
 import java.util.OptionalLong;
 
 /**
- * {@code SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | EXAT unix-seconds | PXAT unix-milliseconds | KEEPTTL]}
- *
- * <ul>
- *   <li>{@code EX}/{@code PX} — 지금부터 몇 초/밀리초 뒤에 만료. {@code EXAT}/{@code PXAT} — 유닉스 시각으로 만료.</li>
- *   <li>{@code NX} — 키가 <b>없을 때만</b> 쓴다. {@code XX} — 키가 <b>있을 때만</b> 쓴다.
- *       조건이 안 맞아 쓰지 않았으면 {@code OK} 대신 nil 을 준다.</li>
- *   <li>{@code GET} — {@code OK} 대신 쓰기 전의 값(없었으면 nil)을 준다.</li>
- *   <li>{@code KEEPTTL} — 기존 만료 시각을 유지한다.</li>
- * </ul>
- *
- * <p>가장 틀리기 쉬운 지점: 옵션 없는 {@code SET} 은 값만 바꾸는 게 아니라 <b>만료 시각도 지운다</b>.
- * {@code SET k v EX 10} 뒤에 {@code SET k v2} 를 하면 k 는 더 이상 만료되지 않는다.
- * 기존 만료를 유지하려면 {@code KEEPTTL} 을 줘야 한다.
- *
- * <p>옵션 해석은 실제 Redis 와 같은 두 단계다.
- * <ol>
- *   <li>옵션 이름만 훑어서 조합이 맞는지 본다. 막는 건 <b>서로 다른 종류끼리의 충돌</b>뿐이고,
- *       같은 옵션의 반복은 받아준다. {@code EX 10 EX 20} 은 뒤의 20초가 적용된다.</li>
- *   <li>그다음 마지막으로 받은 만료 값 하나만 숫자로 해석한다.</li>
- * </ol>
- * 그래서 {@code SET k v EX ten BOGUS} 는 "정수가 아님"이 아니라 syntax error 이고,
- * {@code SET k v EX ten EX 10} 은 앞의 {@code ten} 을 보지도 않고 성공한다.
+ * SET key value [NX|XX] [GET] [EX s|PX ms|EXAT unix-s|PXAT unix-ms|KEEPTTL]
+ * NX/XX 조건 불일치 시 nil, GET이면 이전 값
+ * KEEPTTL 없으면 기존 만료 시각 제거
+ * 옵션 조합 검사 후 마지막 만료 값만 해석 (Redis와 동일), 같은 옵션 반복 허용
  */
 public final class SetCommand implements Command {
 
-    /** 만료 옵션 종류. 단위와, 지금부터의 상대 시간인지 절대 시각인지를 함께 담는다. */
     private enum ExpiryOption {
         EX(1000, true),
         PX(1, true),
@@ -68,7 +49,7 @@ public final class SetCommand implements Command {
             return Errors.wrongNumberOfArguments(name());
         }
 
-        // 1단계: 옵션 조합만 확인한다.
+        // 옵션 조합만 확인
         boolean nx = false;
         boolean xx = false;
         boolean get = false;
@@ -113,7 +94,7 @@ public final class SetCommand implements Command {
             }
         }
 
-        // 2단계: 만료 값을 해석한다.
+        // 만료 값 해석
         Keyspace keyspace = ctx.keyspace();
         long expireAt = Entry.NO_EXPIRY;
         if (expiry != null) {
@@ -136,7 +117,7 @@ public final class SetCommand implements Command {
         Entry previous = keyspace.get(key);
         RespValue previousValue = RespValue.NIL;
         if (previous != null && get) {
-            // GET 없는 SET 은 자료형을 가리지 않고 덮어쓴다. 기존 값을 돌려줘야 할 때만 그게 문자열이어야 한다.
+            // GET 없으면 자료형 무관 덮어쓰기
             if (!(previous.value() instanceof StringValue string)) {
                 return Errors.wrongType();
             }
@@ -144,14 +125,13 @@ public final class SetCommand implements Command {
         }
 
         if ((nx && previous != null) || (xx && previous == null)) {
-            // 조건이 안 맞아 쓰지 않는다. GET 을 줬으면 그래도 기존 값은 돌려준다.
             return get ? previousValue : RespValue.NIL;
         }
 
         if (keepTtl && previous != null) {
             expireAt = previous.expireAtMillis();
         }
-        // EXAT/PXAT 로 이미 지난 시각을 줬다면 여기서 저장은 되지만, 다음에 읽는 순간 만료로 확인돼 없는 키로 보인다.
+        // 지난 EXAT/PXAT도 저장 - 다음 조회 시 만료
         keyspace.put(key, new Entry(StringValue.of(args.get(1)), expireAt));
         return get ? previousValue : RespValue.OK;
     }

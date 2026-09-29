@@ -13,11 +13,7 @@ import glassredis.store.SortedSetValue;
 import java.util.List;
 import java.util.OptionalDouble;
 
-/**
- * {@code ZINCRBY key increment member} — 점수에 더하고, 결과 점수를 준다. 없는 멤버는 0 에서 시작한다.
- *
- * <p>점수가 바뀌면 스킵 리스트 안에서 자리를 옮긴다. 순위표에서 점수가 오른 사람이 위로 올라가는 장면이다.
- */
+/** ZINCRBY key increment member - 결과 점수, 없는 멤버는 0부터 */
 public final class ZincrbyCommand implements Command {
 
     @Override

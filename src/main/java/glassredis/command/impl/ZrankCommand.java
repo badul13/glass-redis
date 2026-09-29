@@ -10,12 +10,7 @@ import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
-/**
- * {@code ZRANK key member} / {@code ZREVRANK key member} — 0부터 세는 순위. 멤버가 없으면 nil.
- * {@code ZRANK} 는 점수가 낮은 쪽이 0, {@code ZREVRANK} 는 높은 쪽이 0 이다.
- *
- * <p>skiplist 면 span 덕분에 멤버가 백만 개여도 처음부터 세지 않는다(O(log n)). listpack(128개 이하)이면 훑는다.
- */
+/** ZRANK/ZREVRANK key member - 0부터 센 순위, 멤버 없으면 nil */
 public final class ZrankCommand implements Command {
 
     private final String name;

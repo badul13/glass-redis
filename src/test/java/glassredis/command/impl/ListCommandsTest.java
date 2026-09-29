@@ -20,14 +20,14 @@ class ListCommandsTest {
     private final CommandTester tester = new CommandTester();
 
     @Test
-    @DisplayName("LPUSH 는 원소를 하나씩 앞에 넣어서 순서가 뒤집힌다")
+    @DisplayName("LPUSH - 하나씩 앞에 삽입되어 순서 역전")
     void lpushReversesOrder() {
         assertEquals(integer(3), run("LPUSH", "k", "a", "b", "c"));
         assertEquals(array("c", "b", "a"), run("LRANGE", "k", "0", "-1"));
     }
 
     @Test
-    @DisplayName("RPUSH 는 적은 순서 그대로 뒤에 붙는다")
+    @DisplayName("RPUSH - 적은 순서 그대로 뒤에 추가")
     void rpushKeepsOrder() {
         run("RPUSH", "k", "a", "b");
         assertEquals(integer(4), run("RPUSH", "k", "c", "d"));
@@ -35,7 +35,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("LPOP/RPOP 은 양 끝에서 꺼내고, 비면 키가 사라진다")
+    @DisplayName("LPOP/RPOP - 양 끝에서 추출, 비면 키 소멸")
     void popRemovesKeyWhenEmpty() {
         run("RPUSH", "k", "a", "b");
 
@@ -46,7 +46,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("count 를 주면 1 이어도 배열로 답하고, 있는 만큼만 꺼낸다")
+    @DisplayName("count 지정 시 1 이어도 배열 응답, 있는 만큼만 추출")
     void popWithCount() {
         run("RPUSH", "k", "a", "b", "c");
 
@@ -56,7 +56,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("count 가 0 이면 빈 배열, 음수면 에러다")
+    @DisplayName("count 가 0 이면 빈 배열, 음수면 에러")
     void popCountBounds() {
         run("RPUSH", "k", "a");
 
@@ -66,7 +66,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("LRANGE 는 음수 인덱스를 뒤에서 세고, 범위를 넘으면 잘라서 맞춘다")
+    @DisplayName("LRANGE - 음수 인덱스는 뒤에서부터, 범위 초과는 잘라서 보정")
     void lrangeIndexes() {
         run("RPUSH", "k", "a", "b", "c", "d");
 
@@ -81,7 +81,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("LINDEX 는 앞뒤 어느 쪽 인덱스든 받고, 범위 밖이면 nil 이다")
+    @DisplayName("LINDEX - 앞뒤 인덱스 모두 허용, 범위 밖이면 nil")
     void lindex() {
         run("RPUSH", "k", "a", "b", "c", "d", "e");
 
@@ -94,7 +94,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("LREM 은 count 부호에 따라 앞에서, 뒤에서, 전부 지운다")
+    @DisplayName("LREM - count 부호에 따라 앞에서, 뒤에서, 전부 삭제")
     void lrem() {
         run("RPUSH", "k", "x", "a", "x", "b", "x");
 
@@ -110,7 +110,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("LTRIM 은 구간만 남기고, 남는 게 없으면 키를 지운다")
+    @DisplayName("LTRIM - 구간만 유지, 남는 게 없으면 키 삭제")
     void ltrim() {
         run("RPUSH", "k", "a", "b", "c", "d", "e");
 
@@ -122,14 +122,14 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("TYPE 은 list 를 준다")
+    @DisplayName("TYPE - list")
     void type() {
         run("RPUSH", "k", "a");
         assertEquals(new RespValue.SimpleString("list"), run("TYPE", "k"));
     }
 
     @Test
-    @DisplayName("문자열에 List 명령을, List 에 문자열 명령을 쓰면 WRONGTYPE 이다")
+    @DisplayName("문자열에 List 명령, List 에 문자열 명령 사용 시 WRONGTYPE")
     void wrongType() {
         run("SET", "s", "v");
         run("RPUSH", "l", "a");
@@ -140,12 +140,12 @@ class ListCommandsTest {
         assertEquals(WRONGTYPE, run("INCR", "l"));
         assertEquals(WRONGTYPE, run("APPEND", "l", "x"));
         assertEquals(WRONGTYPE, run("SET", "l", "v", "GET"));
-        // MGET 은 에러 대신 그 자리를 nil 로 채운다
+        // MGET - 에러 대신 그 자리에 nil
         assertEquals(new RespValue.Array(List.of(bulk("v"), RespValue.NIL)), run("MGET", "s", "l"));
     }
 
     @Test
-    @DisplayName("SET 은 자료형을 가리지 않고 덮어쓴다")
+    @DisplayName("SET - 자료형 무관하게 덮어쓰기")
     void setOverwritesAnyType() {
         run("RPUSH", "k", "a");
 
@@ -154,7 +154,7 @@ class ListCommandsTest {
     }
 
     @Test
-    @DisplayName("만료 시각은 List 에도 걸린다")
+    @DisplayName("List 에도 만료 시각 적용")
     void listsExpire() {
         run("RPUSH", "k", "a");
         run("PEXPIRE", "k", "100");

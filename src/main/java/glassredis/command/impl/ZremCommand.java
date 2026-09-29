@@ -10,10 +10,7 @@ import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
-/**
- * {@code ZREM key member [member ...]} — 멤버를 빼고, 실제로 뺀 수를 준다.
- * 마지막 멤버가 빠지면 키째로 사라진다.
- */
+/** ZREM key member [member ...] - 비면 키 삭제 */
 public final class ZremCommand implements Command {
 
     @Override

@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RespReaderTest {
 
     @Test
-    @DisplayName("배열 형식 명령을 argv 로 읽는다")
+    @DisplayName("배열 형식 명령을 argv 로 파싱")
     void arrayCommand() throws IOException {
         List<byte[]> argv = reader("*2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n").readCommand();
 
@@ -28,16 +28,16 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("인자 안에 CRLF 가 있어도 길이대로 잘라낸다")
+    @DisplayName("인자 안에 CRLF 가 있어도 길이 기준으로 절단")
     void binarySafeArgument() throws IOException {
-        // 길이 6 = a b CR LF c d. 구분자를 찾는 방식이었다면 여기서 잘못 잘렸을 것이다.
+        // 길이 6 = a b CR LF c d
         List<byte[]> argv = reader("*2\r\n$4\r\nECHO\r\n$6\r\nab\r\ncd\r\n").readCommand();
 
         assertArrayEquals(new byte[]{'a', 'b', '\r', '\n', 'c', 'd'}, argv.get(1));
     }
 
     @Test
-    @DisplayName("빈 인자도 읽어낸다")
+    @DisplayName("빈 인자도 파싱")
     void emptyArgument() throws IOException {
         List<byte[]> argv = reader("*2\r\n$4\r\nECHO\r\n$0\r\n\r\n").readCommand();
 
@@ -46,7 +46,7 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("한 버퍼에 명령이 여러 개 붙어 와도 하나씩 읽는다")
+    @DisplayName("한 버퍼에 명령이 여러 개 붙어 와도 하나씩 파싱")
     void pipelinedCommands() throws IOException {
         RespReader reader = reader("*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n");
 
@@ -56,7 +56,7 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("인라인 명령을 공백으로 자른다")
+    @DisplayName("인라인 명령 - 공백 기준 분리")
     void inlineCommand() throws IOException {
         List<byte[]> argv = reader("ECHO hello\r\n").readCommand();
 
@@ -66,7 +66,7 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("인라인은 LF 만 있어도, 공백이 여러 개여도 처리한다")
+    @DisplayName("인라인 - LF 만 있어도, 공백이 여러 개여도 처리")
     void inlineToleratesWhitespace() throws IOException {
         List<byte[]> argv = reader("  PING   extra \n").readCommand();
 
@@ -76,13 +76,13 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("빈 줄은 빈 명령이 된다")
+    @DisplayName("빈 줄은 빈 명령")
     void blankLine() throws IOException {
         assertTrue(reader("\r\n").readCommand().isEmpty());
     }
 
     @Test
-    @DisplayName("스트림이 끝나면 null 을 준다")
+    @DisplayName("스트림 종료 시 null")
     void endOfStream() throws IOException {
         assertNull(reader("").readCommand());
     }
@@ -100,9 +100,9 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("터무니없이 큰 벌크 길이는 메모리를 잡기 전에 거절한다")
+    @DisplayName("터무니없이 큰 벌크 길이는 메모리 할당 전에 거절")
     void rejectsHugeBulkLength() {
-        // 검사가 없으면 이 한 줄로 서버가 OutOfMemoryError 로 죽는다.
+        // 검사가 없으면 OutOfMemoryError 발생
         assertThrows(RespProtocolException.class,
                 () -> reader("*1\r\n$999999999999\r\n").readCommand());
     }
@@ -115,7 +115,7 @@ class RespReaderTest {
     }
 
     @Test
-    @DisplayName("readValue 는 임의의 RESP 값을 읽는다")
+    @DisplayName("readValue - 임의의 RESP 값 파싱")
     void readsArbitraryValues() throws IOException {
         assertEquals(new RespValue.SimpleString("OK"), reader("+OK\r\n").readValue());
         assertEquals(new RespValue.Err("ERR nope"), reader("-ERR nope\r\n").readValue());

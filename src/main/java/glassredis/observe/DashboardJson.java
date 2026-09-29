@@ -2,22 +2,13 @@ package glassredis.observe;
 
 import java.util.List;
 
-/**
- * 이벤트와 스냅샷을 브라우저가 읽을 JSON 으로 옮긴다.
- *
- * <p>시간은 전부 서버가 잰 그대로(ns, ms) 내보내고 사람이 읽을 단위로 바꾸는 건 화면에 맡긴다.
- * 여기서 "0.3ms" 같은 문자열로 만들어 보내면 화면에서 정렬하거나 그래프로 그릴 수 없다.
- */
+/** 이벤트·스냅샷 JSON 변환 - 시간은 ns, ms 숫자 그대로, 표시 단위는 화면 몫 */
 final class DashboardJson {
 
     private DashboardJson() {
     }
 
-    /**
-     * 이번 구간에 일어난 일들.
-     *
-     * @param dropped 이 화면이 못 따라가서 버린 개수. 0 이 아니면 화면은 그 자리에 끊긴 표시를 해야 한다.
-     */
+    /** @param dropped 화면이 못 따라가 버린 개수 - 0이 아니면 화면에 끊김 표시 */
     static String activity(List<EventRecord> records, long dropped) {
         StringBuilder out = new StringBuilder(records.size() * 96 + 32);
         out.append('{');

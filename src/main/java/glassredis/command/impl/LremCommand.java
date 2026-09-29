@@ -13,13 +13,8 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * {@code LREM key count element} — {@code element} 와 같은 원소를 지우고, 지운 개수를 준다.
- *
- * <ul>
- *   <li>{@code count > 0} — 앞에서부터 최대 count 개</li>
- *   <li>{@code count < 0} — 뒤에서부터 최대 |count| 개</li>
- *   <li>{@code count = 0} — 전부</li>
- * </ul>
+ * LREM key count element - 삭제 개수
+ * count 양수면 앞에서, 음수면 뒤에서 최대 |count|개, 0이면 전부
  */
 public final class LremCommand implements Command {
 
@@ -49,7 +44,7 @@ public final class LremCommand implements Command {
             return Errors.wrongType();
         }
 
-        // Long.MIN_VALUE 는 부호를 뒤집을 수 없지만, 그만큼 지울 원소도 없으니 "제한 없음"으로 봐도 같다.
+        // Long.MIN_VALUE - 부호 반전 불가라 제한 없음 취급, 결과 동일
         long limit = count == 0 || count == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(count);
         long removed = list.remove(target, limit, count < 0);
 

@@ -7,12 +7,7 @@ import glassredis.resp.RespValue;
 
 import java.util.List;
 
-/**
- * {@code ECHO <message>} — 받은 값을 그대로 돌려준다.
- *
- * <p>기능은 시시하지만 왕복 경로 전체(읽기 → 파싱 → 실행 → 직렬화 → 쓰기)를
- * 바이트 손실 없이 통과하는지 확인하는 시험지 역할을 한다.
- */
+/** ECHO message */
 public final class EchoCommand implements Command {
 
     @Override

@@ -15,11 +15,9 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * {@code LRANGE key start stop} — 구간의 원소들. 인덱스 규칙은 {@link IndexRange}.
- *
- * <p>인덱스로 바로 갈 수 없어서 구간의 첫 원소까지 걸어가야 한다. 가까운 쪽 끝에서 출발하고,
- * quicklist 라면 원소 대신 노드를 건너뛴다. 그래도 비용은 "건너뛴 수 + 돌려준 수"에 비례하므로
- * 양 끝 근처는 싸고, 긴 List 의 한가운데는 비싸다.
+ * LRANGE key start stop - 인덱스 규칙은 {@link IndexRange}
+ * 비용 - 건너뛴 수 + 반환 수에 비례
+ * 가까운 쪽 끝에서 탐색, quicklist는 노드 단위 건너뛰기
  */
 public final class LrangeCommand implements Command {
 

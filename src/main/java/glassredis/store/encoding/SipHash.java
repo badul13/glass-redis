@@ -3,19 +3,12 @@ package glassredis.store.encoding;
 import java.security.SecureRandom;
 
 /**
- * SipHash-1-2. Redis 가 해시 테이블(dict)의 키를 버킷에 나눌 때 쓰는 해시 함수다. Redis 7.2 {@code siphash.c} 를 옮겼다.
- *
- * <p>자바의 {@code Arrays.hashCode} 를 쓰지 않는 이유는 두 가지다.
- * <ul>
- *   <li><b>씨앗(seed)</b> — 서버가 켜질 때 무작위 128비트 씨앗을 뽑아 섞는다. 공격자가 같은 버킷에 몰리는
- *       키를 미리 계산해서 보내면 해시 테이블이 연결 리스트처럼 느려지는데(해시 플러딩), 씨앗을 모르면 그걸 못 한다.
- *       그래서 같은 키를 넣어도 서버를 켤 때마다 {@code HGETALL} 순서가 달라진다. 실제 Redis 도 그렇다.</li>
- *   <li><b>라운드 수</b> — 표준 SipHash-2-4 보다 라운드를 줄인 1-2 다. Redis 는 속도를 위해 이걸 골랐다.</li>
- * </ul>
+ * dict용 SipHash-1-2 - Redis 7.2 siphash.c
+ * 해시 플러딩 방지용 시작 시 무작위 씨앗 → 재시작마다 순회 순서 변동
  */
 public final class SipHash {
 
-    /** 프로세스마다 한 번 뽑는 씨앗. 실제 Redis 도 서버 시작 때 무작위로 정한다. */
+    /** 프로세스당 1회 생성 */
     private static final byte[] SEED = new byte[16];
 
     static {
@@ -48,7 +41,7 @@ public final class SipHash {
         for (int i = 0; i < end; i += 8) {
             long m = le64(in, i);
             v[3] ^= m;
-            round(v); // 블록마다 1라운드 (SipHash-1-2 의 1)
+            round(v); // 블록당 1라운드
             v[0] ^= m;
         }
         for (int i = len - 1; i >= end; i--) {
@@ -58,7 +51,7 @@ public final class SipHash {
         round(v);
         v[0] ^= b;
         v[2] ^= 0xff;
-        round(v); // 마무리 2라운드 (SipHash-1-2 의 2)
+        round(v); // 마무리 2라운드
         round(v);
         return v[0] ^ v[1] ^ v[2] ^ v[3];
     }

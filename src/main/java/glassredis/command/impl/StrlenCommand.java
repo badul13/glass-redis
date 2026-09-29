@@ -10,11 +10,7 @@ import glassredis.store.StringValue;
 
 import java.util.List;
 
-/**
- * {@code STRLEN key} — 값의 길이. 키가 없으면 0.
- *
- * <p>문자 수가 아니라 바이트 수다. {@code "한글"} 은 UTF-8 로 6 바이트라 6 이다.
- */
+/** STRLEN key - 바이트 수, 키 없으면 0 */
 public final class StrlenCommand implements Command {
 
     @Override

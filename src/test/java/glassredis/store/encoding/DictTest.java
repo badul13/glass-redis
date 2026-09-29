@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DictTest {
 
     @Test
-    @DisplayName("처음 크기는 4이고, 원소 수가 버킷 수에 닿으면 새 테이블을 만든다")
+    @DisplayName("초기 크기 4 - 원소 수가 버킷 수에 닿으면 새 테이블 생성")
     void expandsAtOneToOne() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 4; i++) {
@@ -26,14 +26,14 @@ class DictTest {
         assertEquals(4, dict.tableSize(0));
         assertFalse(dict.isRehashing());
 
-        // 다섯 번째를 넣는 순간 원소 4 = 버킷 4 라서 8칸짜리 새 테이블을 만든다.
+        // 원소 4 = 버킷 4 - 다섯 번째 추가에서 8칸 테이블로 확장
         dict.add(Key.of("k4"), 4);
         assertEquals(8, dict.tableSize(1));
         assertTrue(dict.isRehashing());
     }
 
     @Test
-    @DisplayName("옮기는 중에도 두 테이블을 다 봐서 모든 키를 찾는다")
+    @DisplayName("옮기는 중에도 두 테이블을 모두 확인해 모든 키 조회")
     void findsDuringRehash() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 5; i++) {
@@ -46,7 +46,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("명령이 올 때마다 조금씩 옮기다가, 다 옮기면 새 테이블이 ht[0] 이 된다")
+    @DisplayName("명령마다 조금씩 이전, 완료 시 새 테이블이 ht[0]")
     void rehashFinishesStepByStep() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 5; i++) {
@@ -64,7 +64,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("채움률이 10% 아래로 떨어지면 원소 수에 맞춰 줄인다")
+    @DisplayName("채움률 10% 미만이면 원소 수에 맞춰 축소")
     void shrinks() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 100; i++) {
@@ -89,7 +89,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("무작위 넣기·지우기가 HashMap 과 같은 결과를 낸다")
+    @DisplayName("무작위 넣기·지우기 결과가 HashMap 과 동일")
     void matchesReference() {
         SplittableRandom random = new SplittableRandom(11);
         Dict<Integer> dict = new Dict<>();
@@ -115,7 +115,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("scan 은 0 에서 시작해 0 으로 돌아오기까지 모든 키를 한 번 이상 본다")
+    @DisplayName("scan - 0 에서 시작해 0 으로 돌아오기까지 모든 키를 한 번 이상 방문")
     void scanVisitsEverything() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 500; i++) {
@@ -131,7 +131,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("훑는 도중에 테이블이 커지고 옮겨져도 처음부터 있던 키는 빠뜨리지 않는다 — 커서를 거꾸로 세는 이유")
+    @DisplayName("순회 도중 테이블이 커지고 옮겨져도 처음부터 있던 키 누락 없음 - 커서를 거꾸로 세는 이유")
     void scanSurvivesGrowth() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 100; i++) {
@@ -142,8 +142,7 @@ class DictTest {
         int added = 0;
         do {
             cursor = dict.scan(cursor, (key, value) -> seen.add(new String(key.bytes())));
-            // 한 칸 훑을 때마다 키를 더 넣어서, 훑는 사이에 테이블이 몇 번이고 커지고 옮겨지게 한다.
-            // 끝없이 넣으면 테이블도 끝없이 커져 한 바퀴가 끝나지 않으니 2000개에서 멈춘다.
+            // 스캔 중 테이블 확장·이전을 유도하려고 키 추가 - 끝없이 커지면 스캔이 안 끝나므로 2000개에서 중단
             for (int j = 0; j < 20 && added < 2000; j++) {
                 dict.add(Key.of("new" + added++), 0);
             }
@@ -155,7 +154,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("scan 이 부른 visitor 가 지금 보는 키를 지워도 된다 — 주기적 만료가 그렇게 쓴다")
+    @DisplayName("scan 의 visitor 가 현재 키를 지워도 안전 - 주기적 만료의 사용 방식")
     void scanAllowsDeletingCurrentKey() {
         Dict<Integer> dict = new Dict<>();
         for (int i = 0; i < 200; i++) {
@@ -170,7 +169,7 @@ class DictTest {
     }
 
     @Test
-    @DisplayName("SipHash-1-2 는 같은 씨앗이면 같은 값, 씨앗이 다르면 다른 값을 낸다")
+    @DisplayName("SipHash-1-2 - 같은 씨앗이면 같은 값, 씨앗이 다르면 다른 값")
     void sipHashUsesSeed() {
         byte[] input = "hello".getBytes();
         byte[] seedA = new byte[16];

@@ -13,12 +13,7 @@ import glassredis.store.ListValue;
 import java.util.List;
 import java.util.OptionalLong;
 
-/**
- * {@code LTRIM key start stop} — 구간만 남기고 나머지를 잘라낸다. 인덱스 규칙은 {@link IndexRange}.
- *
- * <p>{@code LPUSH} 뒤에 {@code LTRIM k 0 99} 를 붙이면 "최근 100개만 남기는 목록"이 된다.
- * 이 명령의 대표적인 쓰임새다. 남길 구간이 비면 키째로 지운다.
- */
+/** LTRIM key start stop - 인덱스 규칙은 {@link IndexRange}, 빈 구간이면 키 삭제 */
 public final class LtrimCommand implements Command {
 
     @Override

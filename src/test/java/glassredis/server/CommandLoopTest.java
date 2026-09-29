@@ -50,7 +50,7 @@ class CommandLoopTest {
     }
 
     @Test
-    @DisplayName("어느 스레드에서 보내든 명령은 실행 스레드 하나에서만 실행된다")
+    @DisplayName("어느 스레드에서 보내든 명령 실행은 실행 스레드 하나에서만")
     void executesOnSingleThread() throws Exception {
         Set<Thread> executedOn = ConcurrentHashMap.newKeySet();
         Command recordThread = new StubCommand(ctx -> {
@@ -58,7 +58,7 @@ class CommandLoopTest {
             return RespValue.OK;
         });
 
-        // 가상 스레드 1000개가 동시에 명령을 보낸다. 커넥션 1000개가 동시에 들어온 상황과 같다.
+        // 가상 스레드 1000개로 동시 접속 재현
         try (ExecutorService clients = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<RespValue>> replies = new ArrayList<>();
             for (int i = 0; i < 1000; i++) {
@@ -74,7 +74,7 @@ class CommandLoopTest {
     }
 
     @Test
-    @DisplayName("명령이 예외를 던지면 에러 응답으로 바꾸고, 실행 스레드는 계속 돈다")
+    @DisplayName("명령 예외는 에러 응답으로 변환 - 실행 스레드는 계속 동작")
     void survivesCommandFailure() throws Exception {
         Command broken = new StubCommand(ctx -> {
             throw new IllegalStateException("boom");
@@ -87,7 +87,7 @@ class CommandLoopTest {
     }
 
     @Test
-    @DisplayName("주기적 샘플링이 돌아서, 아무도 읽지 않는 만료 키도 결국 지워진다")
+    @DisplayName("주기적 샘플링 - 아무도 읽지 않는 만료 키도 결국 삭제")
     void activeExpiryRunsWithoutReads() throws Exception {
         ManualClock clock = new ManualClock(1_000_000);
         Keyspace keyspace = new Keyspace(clock);
@@ -96,14 +96,13 @@ class CommandLoopTest {
                     Entry.of("v".getBytes(StandardCharsets.UTF_8)).withExpireAt(clock.millis() + 10));
         }
         clock.advanceMillis(11);
-        // 실행 스레드가 시작하기 전이라 여기서 키스페이스를 직접 채워도 된다.
+        // 실행 스레드 시작 전이라 키스페이스 직접 채우기 가능
 
         CommandLoop expiringLoop = new CommandLoop(keyspace, EventBus.NONE, () -> {
         });
         expiringLoop.start();
         try {
-            // 크기도 실행 스레드를 거쳐 읽는다. 테스트 스레드가 키스페이스를 직접 읽으면 그 자체가 규칙 위반이다.
-            // 크기를 세는 건 get() 을 부르지 않으므로, 줄어든다면 샘플링이 지운 것이다.
+            // 크기도 실행 스레드에서 조회 - size() 는 get() 을 부르지 않으므로 줄어든 만큼이 샘플링 삭제분
             Command size = new StubCommand(ctx -> new RespValue.Int(ctx.keyspace().size()));
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (!expiringLoop.submit(size, List.of(), 1).get().equals(new RespValue.Int(0))) {
@@ -116,7 +115,7 @@ class CommandLoopTest {
     }
 
     @Test
-    @DisplayName("관측을 켜면 실행한 명령이 이벤트로 나온다")
+    @DisplayName("관측 활성화 시 실행한 명령이 이벤트로 발행")
     void publishesExecutedCommands() throws Exception {
         EventHub hub = new EventHub();
         EventBuffer screen = hub.subscribe();
@@ -129,7 +128,7 @@ class CommandLoopTest {
 
             assertEquals(RespValue.OK, observed.submit(stub, args, 7).get());
 
-            // 이벤트는 응답을 채우기 전에 발행된다. 그래서 get() 이 돌아온 시점에는 이미 버퍼에 들어 있다.
+            // 이벤트는 응답 전에 발행 - get() 이후에는 이미 버퍼에 존재
             List<EventRecord> drained = screen.drain(10);
             assertEquals(1, drained.size());
             Event.CommandExecuted executed = (Event.CommandExecuted) drained.get(0).event();
@@ -143,7 +142,6 @@ class CommandLoopTest {
         }
     }
 
-    /** 실행할 내용을 람다로 받는 테스트용 명령. */
     private record StubCommand(Function<Context, RespValue> body) implements Command {
 
         @Override

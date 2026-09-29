@@ -12,12 +12,7 @@ import glassredis.store.ListValue;
 import java.util.List;
 import java.util.OptionalLong;
 
-/**
- * {@code LINDEX key index} — 위치 하나의 원소. 음수는 뒤에서부터 센다. 범위 밖이면 nil.
- *
- * <p>인덱스로 바로 갈 수 없어서 걸어가야 한다. 가까운 쪽 끝에서 출발하므로(listpack 의 backlen 덕분에 뒤로도 걷는다)
- * {@code LINDEX k -1} 은 List 가 아무리 길어도 한 걸음이다.
- */
+/** LINDEX key index - 음수는 뒤에서부터, 범위 밖이면 nil, 가까운 쪽 끝에서 탐색 */
 public final class LindexCommand implements Command {
 
     @Override

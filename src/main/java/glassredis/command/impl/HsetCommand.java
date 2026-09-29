@@ -11,12 +11,7 @@ import glassredis.store.Keyspace;
 
 import java.util.List;
 
-/**
- * {@code HSET key field value [field value ...]} — 필드에 값을 넣고, <b>새로 생긴</b> 필드 수를 준다.
- * 이미 있던 필드의 값을 바꾼 건 세지 않는다. 키가 없으면 새 Hash 를 만든다.
- *
- * <p>예전에는 여러 필드를 넣는 명령이 {@code HMSET} 으로 따로 있었는데, Redis 4 부터 {@code HSET} 이 받는다.
- */
+/** HSET key field value [field value ...] - 새 필드 수만 집계, 값만 바뀐 필드 제외 */
 public final class HsetCommand implements Command {
 
     @Override
@@ -43,7 +38,7 @@ public final class HsetCommand implements Command {
             return Errors.wrongType();
         }
 
-        // 넣기 전에 한 번에 본다. 쌍이 512개를 넘거나 64바이트를 넘는 게 있으면 먼저 hashtable 로 바꿔 둔다.
+        // 쌍 512개 초과 또는 64바이트 초과 값 존재 시 삽입 전 hashtable로 선전환
         hash.prepareForSet(args.subList(1, args.size()));
         long created = 0;
         for (int i = 1; i < args.size(); i += 2) {

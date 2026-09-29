@@ -1,21 +1,12 @@
 package glassredis.observe;
 
-/**
- * JSON 문자열을 쓰는 최소한의 도구.
- *
- * <p>라이브러리를 하나 받아 쓰지 않는 이유는, 이 프로젝트가 내보내는 JSON 의 모양이 전부
- * 여기 있는 몇 개의 record 로 고정돼 있어서다. 임의의 객체를 다룰 필요가 없으니
- * 필요한 건 문자열 하나를 안전하게 따옴표로 감싸는 일뿐이다.
- *
- * <p>이스케이프를 빠뜨리면 값에 들어간 따옴표 하나로 스트림 전체가 깨진다.
- * 키와 값은 사용자가 아무 바이트나 넣을 수 있는 자리이므로 이 처리는 선택이 아니다.
- */
+/** 고정된 몇 가지 모양만 출력 - 라이브러리 없이 직접 작성 */
 final class Json {
 
     private Json() {
     }
 
-    /** 문자열을 이스케이프해서 따옴표까지 붙인다. {@code null} 은 JSON 의 null 이 된다. */
+    /** null은 JSON null */
     static void string(StringBuilder out, String text) {
         if (text == null) {
             out.append("null");
@@ -42,7 +33,6 @@ final class Json {
         out.append('"');
     }
 
-    /** {@code "이름":값} 앞에 쉼표가 필요한지까지 봐주는 도우미. */
     static void field(StringBuilder out, String name, String value) {
         separate(out);
         string(out, name);
@@ -69,10 +59,7 @@ final class Json {
         out.append(':').append(value);
     }
 
-    /**
-     * 실수. JSON 에는 무한대가 없어서 {@code "inf"}, {@code "-inf"} 문자열로 쓴다.
-     * Redis 가 응답에 쓰는 표기와 같게 맞췄다. NaN 은 점수로 들어올 수 없으므로 다루지 않는다.
-     */
+    /** JSON에 무한대 없음 - Redis 표기대로 "inf", "-inf" 문자열, NaN 입력 없음 */
     static void field(StringBuilder out, String name, double value) {
         separate(out);
         string(out, name);
@@ -84,14 +71,13 @@ final class Json {
         }
     }
 
-    /** {@code "이름":} 까지만 쓴다. 뒤에 배열이나 객체가 이어질 때 쓴다. */
+    /** "이름": 까지만 출력 */
     static void name(StringBuilder out, String name) {
         separate(out);
         string(out, name);
         out.append(':');
     }
 
-    /** 바로 앞이 여는 괄호가 아니면 쉼표를 찍는다. */
     private static void separate(StringBuilder out) {
         char last = out.charAt(out.length() - 1);
         if (last != '{' && last != '[') {

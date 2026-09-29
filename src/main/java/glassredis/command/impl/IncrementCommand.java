@@ -14,15 +14,8 @@ import java.util.List;
 import java.util.OptionalLong;
 
 /**
- * {@code INCR key} / {@code DECR key} / {@code INCRBY key n} / {@code DECRBY key n}
- *
- * <p>값을 64비트 정수로 해석해 더하고, 결과를 다시 문자열로 저장한다. Redis 에 정수 타입이 따로 있는 게 아니라
- * 정수처럼 생긴 문자열이 있을 뿐이다. 키가 없으면 0 에서 시작한다.
- *
- * <p>"읽고, 더하고, 쓰는" 세 단계라서 여러 스레드가 동시에 실행하면 서로의 결과를 덮어써 증가분이 사라진다.
- * 여기서는 실행 스레드가 하나뿐이라 락 없이도 그런 일이 생기지 않는다.
- *
- * <p>값을 고치는 명령이므로 만료 시각은 그대로 둔다.
+ * INCR key, DECR key, INCRBY key n, DECRBY key n
+ * 키 없으면 0부터, 만료 시각 유지
  */
 public final class IncrementCommand implements Command {
 
@@ -72,7 +65,7 @@ public final class IncrementCommand implements Command {
             amount = parsed.getAsLong();
         }
         if (decrement) {
-            // long 의 최솟값은 부호를 뒤집을 수 없다. -(-2^63) 은 2^63 인데 long 의 최댓값은 2^63-1 이다.
+            // Long.MIN_VALUE - 부호 반전 불가
             if (amount == Long.MIN_VALUE) {
                 return Errors.decrementOverflow();
             }

@@ -1,13 +1,7 @@
 import type { Dashboard } from '../useEventStream'
 import { millis } from '../format'
 
-/**
- * 만료가 실제로 어떻게 일어나는지.
- *
- * <p>이 프로젝트를 만든 이유가 여기 들어 있다. SET k v EX 10 을 하면 10초 뒤에 키가 사라진다고
- * 알고 있지만, 실제로는 <b>아무도 정확히 10초에 지우지 않는다</b>. 읽으러 온 명령이 발견해서 지우거나,
- * 주기적 만료가 만료 테이블(expires)을 커서로 조금씩 훑다가 그 키에 닿아야 지워진다. 그 "늦은 시간"을 숫자로 보여준다.
- */
+/** 만료 주기 + 만료 시각부터 실제 삭제까지 지연 */
 export function ExpiryPanel({ cycles, removals, removalCounts, keyspace }: Dashboard) {
   const expiredLate = removals.filter((removal) => removal.reason !== 'DELETED')
   const lateValues = expiredLate.map((removal) => removal.lateBy)
@@ -16,11 +10,10 @@ export function ExpiryPanel({ cycles, removals, removalCounts, keyspace }: Dashb
     : null
   const worstLate = lateValues.length ? Math.max(...lateValues) : null
 
-  // 막대 높이는 그 주기에 지운 키 수에 비례한다. 하나도 못 지운 주기도 낮은 막대로 남겨서
-  // "돌고는 있었는데 건질 게 없었다"는 사실이 보이게 한다.
+  // 막대 높이 - 지운 키 수 비례, 0개 주기도 최소 높이 유지
   const busiest = Math.max(1, ...cycles.map((cycle) => cycle.expired))
-  // 서버가 매 주기 5% 가중치로 섞어 가는 이동 평균이라 마지막 값이 곧 현재 추정치다.
-  // 단, 볼 키가 없는 주기는 이벤트가 오지 않아 값이 멈춘다. 만료 대상이 하나도 없으면 보여주지 않는다.
+  // 서버 이동 평균 - 마지막 값이 현재 추정치
+  // 만료 대상 없으면 값 정지 - 숨김 처리
   const staleEstimate = cycles.length && keyspace?.expiring ? cycles[cycles.length - 1].stalePercent : null
 
   return (

@@ -10,9 +10,7 @@ import java.util.List;
 import static glassredis.command.impl.CommandTester.bulk;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * 인코딩이 바뀌는 경계. 기대값은 전부 실제 Redis 7.4 에 같은 명령을 보내고 {@code OBJECT ENCODING} 으로 받아 본 것이다.
- */
+/** 인코딩 전환 경계 - 기대값은 실제 Redis 7.4 의 {@code OBJECT ENCODING} 결과 */
 class EncodingTest {
 
     private final CommandTester tester = new CommandTester();
@@ -35,7 +33,7 @@ class EncodingTest {
     }
 
     @Test
-    @DisplayName("List: 1바이트 원소 2729개까지 listpack, 2730번째에 quicklist, 1363개로 줄면 되돌아온다")
+    @DisplayName("List: 1바이트 원소 2729개까지 listpack, 2730번째에 quicklist, 1363개로 줄면 listpack 복귀")
     void list() {
         for (int i = 0; i < 2729; i++) {
             run("RPUSH", "l", "x");
@@ -53,7 +51,7 @@ class EncodingTest {
     }
 
     @Test
-    @DisplayName("Hash: 512개·64바이트까지 listpack, 넘으면 hashtable, 줄어도 안 돌아온다")
+    @DisplayName("Hash: 512개·64바이트까지 listpack, 넘으면 hashtable, 줄어도 복귀 없음")
     void hash() {
         for (int i = 0; i < 512; i++) {
             run("HSET", "h", "f" + i, "v");

@@ -10,7 +10,7 @@ import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
-/** {@code ZCARD key} — 멤버 수. 키가 없으면 0. */
+/** ZCARD key - 키 없으면 0 */
 public final class ZcardCommand implements Command {
 
     @Override

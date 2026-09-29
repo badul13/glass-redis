@@ -10,10 +10,7 @@ import glassredis.store.SetValue;
 
 import java.util.List;
 
-/**
- * {@code SISMEMBER key member} — 원소가 있으면 1, 없으면 0.
- * hashtable 이면 O(1), intset 이면 이진 탐색 O(log n), listpack 이면 훑어서 O(n) 이다.
- */
+/** SISMEMBER key member */
 public final class SismemberCommand implements Command {
 
     @Override

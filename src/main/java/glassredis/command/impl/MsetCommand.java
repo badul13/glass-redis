@@ -9,12 +9,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/**
- * {@code MSET key value [key value ...]} — 여러 키를 한 번에 쓴다.
- *
- * <p>실행 중에 다른 명령이 끼어들지 않으므로, 다른 클라이언트가 일부만 써진 상태를 보는 일이 없다.
- * 옵션 없는 {@code SET} 과 같아서 기존 만료 시각은 지워진다.
- */
+/** MSET key value [key value ...] - 옵션 없는 SET처럼 기존 만료 시각 제거 */
 public final class MsetCommand implements Command {
 
     @Override

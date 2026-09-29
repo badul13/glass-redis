@@ -10,7 +10,7 @@ import glassredis.store.ListValue;
 
 import java.util.List;
 
-/** {@code LLEN key} — List 의 길이. 키가 없으면 0. */
+/** LLEN key - 키 없으면 0 */
 public final class LlenCommand implements Command {
 
     @Override

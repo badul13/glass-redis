@@ -10,12 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * 명령을 소켓 없이 직접 실행하는 테스트 도우미.
- *
- * <p>명령은 "Context 와 인자를 받아 응답을 돌려주는 함수"라서 서버를 띄우지 않아도 시험할 수 있다.
- * 시계는 손으로 돌리므로 만료도 {@code sleep} 없이 확인한다.
- */
+/** 소켓 없이 명령 직접 실행 - 시계는 수동 조작 */
 final class CommandTester {
 
     final ManualClock clock = new ManualClock(1_000_000_000L);
@@ -36,7 +31,7 @@ final class CommandTester {
         return RespValue.BulkString.of(text);
     }
 
-    /** 벌크 문자열의 배열. */
+    /** 벌크 문자열 배열 */
     static RespValue array(String... texts) {
         List<RespValue> items = new ArrayList<>();
         for (String text : texts) {

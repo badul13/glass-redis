@@ -21,12 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-/**
- * 진짜 HTTP 로 대시보드 서버와 이야기해 본다.
- *
- * <p>SSE 는 형식이 단순한 대신 한 글자만 틀려도 브라우저가 아무 말 없이 조용히 기다리기만 한다.
- * 그래서 실제로 소켓에 나가는 바이트를 확인한다.
- */
 @Timeout(20)
 class DashboardServerTest {
 
@@ -39,14 +33,13 @@ class DashboardServerTest {
 
     private final EventHub hub = new EventHub();
 
-    /** 스킵 리스트를 부탁받은 키. 브라우저가 보낸 쿼리가 제대로 풀렸는지 본다. */
     private volatile String requestedKey;
     private DashboardServer dashboard;
     private HttpClient client;
 
     @BeforeEach
     void startDashboard() throws IOException {
-        // 포트 0 을 주면 OS 가 비어 있는 포트를 골라준다.
+        // 포트 0 - OS 가 빈 포트 선택
         dashboard = new DashboardServer("127.0.0.1", 0, hub, () -> SNAPSHOT, key -> {
             requestedKey = new String(key, StandardCharsets.UTF_8);
             return SORTED_SET;
@@ -62,7 +55,7 @@ class DashboardServerTest {
     }
 
     @Test
-    @DisplayName("스트림에 붙으면 키 목록부터 내려오고, 그 뒤 벌어진 일이 이어서 온다")
+    @DisplayName("스트림 접속 시 키 목록 먼저, 그 뒤 발생한 사건 순차 전송")
     void streamsKeyspaceThenActivity() throws Exception {
         HttpResponse<Stream<String>> response = client.send(
                 HttpRequest.newBuilder(URI.create(streamUrl())).build(), HttpResponse.BodyHandlers.ofLines());
@@ -84,7 +77,7 @@ class DashboardServerTest {
     }
 
     @Test
-    @DisplayName("보던 화면이 끊기면 구독도 같이 떨어진다 — 안 그러면 서버가 영원히 이벤트를 만든다")
+    @DisplayName("화면 연결이 끊기면 구독도 해제 - 아니면 서버가 이벤트를 끝없이 생성")
     void releasesSubscriptionWhenClientLeaves() throws Exception {
         HttpResponse<Stream<String>> response = client.send(
                 HttpRequest.newBuilder(URI.create(streamUrl())).build(), HttpResponse.BodyHandlers.ofLines());
@@ -97,7 +90,7 @@ class DashboardServerTest {
     }
 
     @Test
-    @DisplayName("스킵 리스트 스트림은 쿼리의 키를 UTF-8 로 풀어서 그 모양을 보낸다")
+    @DisplayName("스킵 리스트 스트림 - 쿼리의 키를 UTF-8 로 디코딩해 그 구조 전송")
     void streamsSortedSetOfRequestedKey() throws Exception {
         String url = "http://127.0.0.1:" + dashboard.port() + "/api/zset?key=%ED%95%9C%EA%B8%80";
         HttpResponse<Stream<String>> response = client.send(
@@ -112,7 +105,7 @@ class DashboardServerTest {
     }
 
     @Test
-    @DisplayName("키 없이 스킵 리스트를 달라고 하면 400 이다")
+    @DisplayName("키 없는 스킵 리스트 요청은 400")
     void skipListNeedsKey() throws Exception {
         HttpResponse<String> response = client.send(
                 HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + dashboard.port() + "/api/zset")).build(),
@@ -122,9 +115,9 @@ class DashboardServerTest {
     }
 
     @Test
-    @DisplayName("대시보드를 빌드하지 않았으면 빌드하는 법을 안내한다")
+    @DisplayName("대시보드 미빌드 시 빌드 방법 안내")
     void explainsHowToBuildTheDashboard() throws Exception {
-        // 빌드가 끝난 환경에서는 진짜 대시보드가 클래스패스에 있다. 비어 있는 곳을 보게 해 빌드 전 상태를 만든다.
+        // 빈 경로 지정으로 빌드 전 상태 재현
         try (DashboardServer unbuilt = new DashboardServer(
                 "127.0.0.1", 0, hub, () -> SNAPSHOT, key -> SORTED_SET, "nowhere/")) {
             unbuilt.start();
@@ -141,7 +134,6 @@ class DashboardServerTest {
         return "http://127.0.0.1:" + dashboard.port() + "/api/stream";
     }
 
-    /** 다음 {@code event:} 줄까지 읽는다. */
     private static String nextEventLine(Iterator<String> lines) {
         while (lines.hasNext()) {
             String line = lines.next();
@@ -152,7 +144,7 @@ class DashboardServerTest {
         return fail("스트림이 끊겼다");
     }
 
-    /** 원하는 종류가 나올 때까지 읽고, 그 data 줄을 돌려준다. */
+    /** 해당 종류 이벤트의 data 줄 */
     private static String nextEventOfType(Iterator<String> lines, String type) {
         for (int i = 0; i < 100; i++) {
             if (nextEventLine(lines).equals(type)) {

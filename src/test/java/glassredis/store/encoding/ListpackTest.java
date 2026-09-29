@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ListpackTest {
 
     @Test
-    @DisplayName("빈 listpack 은 헤더 6바이트와 끝 표시 1바이트다")
+    @DisplayName("빈 listpack - 헤더 6바이트와 끝 표시 1바이트")
     void empty() {
         Listpack lp = new Listpack();
 
@@ -44,7 +44,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("정수로 되돌릴 수 있는 문자열만 정수로 담고, 007 같은 건 문자열로 남긴다")
+    @DisplayName("정수로 되돌릴 수 있는 문자열만 정수로 저장, 007 같은 건 문자열 유지")
     void integerDetection() {
         assertEquals(1, Listpack.encode(bytes("5")).length);
         assertEquals(2, Listpack.encode(bytes("4095")).length);
@@ -58,7 +58,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("문자열 길이에 따라 6비트, 12비트, 32비트 길이 머리를 쓴다")
+    @DisplayName("문자열 길이별 6비트, 12비트, 32비트 길이 머리")
     void stringHeaders() {
         assertEquals(1 + 63, Listpack.encode(new byte[63]).length);
         assertEquals(2 + 64, Listpack.encode(new byte[64]).length);
@@ -67,7 +67,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("backlen 은 7비트씩 끊어 적어서 뒤에서부터 읽을 수 있다")
+    @DisplayName("backlen - 7비트씩 끊어 적어 뒤에서부터 읽기 가능")
     void backlenAllowsWalkingBackwards() {
         Listpack lp = new Listpack();
         lp.append(new byte[200]);  // 원소 길이 202 → backlen 2바이트
@@ -80,7 +80,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("음수 정수를 폭마다 제대로 되돌린다")
+    @DisplayName("폭별 음수 정수 복원")
     void negativeIntegers() {
         long[] values = {-1, -4096, -4097, -32768, -32769, -8388608, -8388609, -2147483648L, -2147483649L,
                 Long.MIN_VALUE};
@@ -97,7 +97,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("seek 는 음수를 뒤에서 세고, 범위 밖이면 -1 이다")
+    @DisplayName("seek - 음수는 뒤에서부터, 범위 밖이면 -1")
     void seek() {
         Listpack lp = listOf("a", "b", "c", "d");
 
@@ -109,7 +109,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("find 는 skip 만큼 건너뛰며 비교한다 — Hash 는 필드만 본다")
+    @DisplayName("find 는 skip 만큼 건너뛰며 비교 - Hash 는 필드만 대상")
     void findWithSkip() {
         Listpack lp = listOf("f1", "v1", "f2", "v1");
 
@@ -119,7 +119,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("정수 원소는 상대도 정수로 해석해서 비교한다")
+    @DisplayName("정수 원소는 상대도 정수로 해석해 비교")
     void integerEquality() {
         Listpack lp = listOf("12");
 
@@ -128,7 +128,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("deleteRange 는 끝까지 지우면 EOF 를 당겨 온다")
+    @DisplayName("deleteRange - 끝까지 지우면 EOF 를 앞으로 이동")
     void deleteRange() {
         Listpack lp = listOf("a", "b", "c", "d", "e");
 
@@ -140,9 +140,9 @@ class ListpackTest {
         assertEquals(7 + 3, lp.bytes()); // "a" 는 인코딩 1 + 데이터 1 + backlen 1
     }
 
-    /** 무작위로 넣고 빼면서 ArrayList 와 맞춰 본다. 헤더의 바이트 수와 원소 수도 매번 확인한다. */
+    /** 헤더의 바이트 수와 원소 수도 매번 확인 */
     @Test
-    @DisplayName("무작위 삽입·삭제·교체가 ArrayList 와 같은 결과를 낸다")
+    @DisplayName("무작위 삽입·삭제·교체 결과가 ArrayList 와 동일")
     void matchesReference() {
         SplittableRandom random = new SplittableRandom(7);
         Listpack lp = new Listpack();
@@ -180,7 +180,7 @@ class ListpackTest {
     }
 
     @Test
-    @DisplayName("toInt64 는 string2ll 과 같은 표기만 받는다")
+    @DisplayName("toInt64 - string2ll 과 같은 표기만 허용")
     void toInt64() {
         assertEquals(Long.MIN_VALUE, Listpack.toInt64(bytes("-9223372036854775808")));
         assertNull(Listpack.toInt64(bytes("-9223372036854775809")));

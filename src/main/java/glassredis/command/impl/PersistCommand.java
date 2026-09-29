@@ -9,11 +9,7 @@ import glassredis.store.Key;
 
 import java.util.List;
 
-/**
- * {@code PERSIST key} — 만료 시각을 지워 영구 키로 만든다.
- *
- * <p>실제로 지웠으면 1, 키가 없거나 원래 만료 시각이 없었으면 0.
- */
+/** PERSIST key - 만료 시각 제거 시 1, 키나 만료 시각 없으면 0 */
 public final class PersistCommand implements Command {
 
     @Override

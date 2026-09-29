@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class EventBufferTest {
 
     @Test
-    @DisplayName("담은 순서대로 꺼내 가고, 꺼내 가면 버퍼가 빈다")
+    @DisplayName("담은 순서대로 배출, 꺼낸 뒤에는 빈 버퍼")
     void drainsInOrder() {
         EventBuffer buffer = new EventBuffer(10);
         buffer.offer(record(1));
@@ -26,7 +26,7 @@ class EventBufferTest {
     }
 
     @Test
-    @DisplayName("가득 차면 가장 오래된 것부터 버린다 — 실시간 화면에서 밀린 줄은 이미 가치가 없다")
+    @DisplayName("가득 차면 오래된 것부터 폐기 - 밀린 줄은 실시간 화면에서 무의미")
     void dropsOldestWhenFull() {
         EventBuffer buffer = new EventBuffer(3);
         for (int i = 1; i <= 5; i++) {
@@ -37,7 +37,7 @@ class EventBufferTest {
     }
 
     @Test
-    @DisplayName("버린 개수를 세어두고, 물어보면 그 뒤로는 다시 0부터 센다")
+    @DisplayName("버린 개수 집계 - 조회 후에는 0부터 재집계")
     void countsDroppedEventsSinceLastAsk() {
         EventBuffer buffer = new EventBuffer(2);
         for (int i = 1; i <= 5; i++) {
@@ -49,7 +49,7 @@ class EventBufferTest {
     }
 
     @Test
-    @DisplayName("비어 있으면 기다렸다가 아무것도 없으면 null 을 준다")
+    @DisplayName("비어 있으면 대기 후 그래도 없으면 null")
     void pollTimesOutWhenEmpty() throws Exception {
         assertNull(new EventBuffer(4).poll(Duration.ofMillis(20)));
     }

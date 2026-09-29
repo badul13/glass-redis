@@ -17,7 +17,7 @@ class HashCommandsTest {
     private final CommandTester tester = new CommandTester();
 
     @Test
-    @DisplayName("HSET 은 새로 생긴 필드만 센다")
+    @DisplayName("HSET - 새로 생긴 필드만 집계")
     void hsetCountsNewFields() {
         assertEquals(integer(2), run("HSET", "h", "a", "1", "b", "2"));
         assertEquals(integer(1), run("HSET", "h", "a", "10", "c", "3"));
@@ -27,14 +27,14 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("필드와 값의 짝이 안 맞으면 인자 개수 에러다")
+    @DisplayName("필드·값 짝 불일치 시 인자 개수 에러")
     void hsetNeedsPairs() {
         assertEquals(error("ERR wrong number of arguments for 'hset' command"), run("HSET", "h", "a"));
         assertEquals(error("ERR wrong number of arguments for 'hset' command"), run("HSET", "h", "a", "1", "b"));
     }
 
     @Test
-    @DisplayName("HGET 은 없는 필드와 없는 키에 nil 을 준다")
+    @DisplayName("HGET - 없는 필드와 없는 키에 nil")
     void hgetMissing() {
         run("HSET", "h", "a", "1");
 
@@ -43,7 +43,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("HMGET 은 인자 순서대로 답하고, 없는 자리는 nil 이다")
+    @DisplayName("HMGET - 인자 순서대로 응답, 없는 자리는 nil")
     void hmget() {
         run("HSET", "h", "a", "1", "b", "2");
 
@@ -53,7 +53,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("HGETALL/HKEYS/HVALS 는 넣은 순서대로 훑는다")
+    @DisplayName("HGETALL/HKEYS/HVALS - 삽입 순서대로 순회")
     void dumps() {
         run("HSET", "h", "name", "glass", "lang", "java");
 
@@ -64,7 +64,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("HDEL 로 마지막 필드를 지우면 키가 사라진다")
+    @DisplayName("HDEL 로 마지막 필드 삭제 시 키 소멸")
     void hdelRemovesKeyWhenEmpty() {
         run("HSET", "h", "a", "1", "b", "2");
 
@@ -77,7 +77,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("HINCRBY 는 없는 필드를 0 에서 시작한다")
+    @DisplayName("HINCRBY - 없는 필드는 0 에서 시작")
     void hincrby() {
         assertEquals(integer(5), run("HINCRBY", "h", "n", "5"));
         assertEquals(integer(2), run("HINCRBY", "h", "n", "-3"));
@@ -85,7 +85,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("HINCRBY 는 필드 값과 증가량 중 어느 쪽이 틀렸는지에 따라 다른 에러를 준다")
+    @DisplayName("HINCRBY - 필드 값 오류와 증가량 오류는 서로 다른 에러")
     void hincrbyErrors() {
         run("HSET", "h", "text", "abc", "big", "9223372036854775807");
 
@@ -95,7 +95,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("실패한 HINCRBY 는 빈 Hash 를 남기지 않는다")
+    @DisplayName("실패한 HINCRBY 후 빈 Hash 잔존 없음")
     void failedHincrbyLeavesNoKey() {
         run("HINCRBY", "h", "n", "not-a-number");
 
@@ -103,7 +103,7 @@ class HashCommandsTest {
     }
 
     @Test
-    @DisplayName("TYPE 은 hash 를 주고, 다른 자료형 명령은 WRONGTYPE 이다")
+    @DisplayName("TYPE 은 hash, 다른 자료형 명령은 WRONGTYPE")
     void typeAndWrongType() {
         run("HSET", "h", "a", "1");
         run("SET", "s", "v");

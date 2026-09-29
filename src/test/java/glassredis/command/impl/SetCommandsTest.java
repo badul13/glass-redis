@@ -14,7 +14,7 @@ class SetCommandsTest {
     private final CommandTester tester = new CommandTester();
 
     @Test
-    @DisplayName("SADD 는 중복을 받지 않고, 새로 들어간 수만 센다")
+    @DisplayName("SADD - 중복 거부, 새로 들어간 수만 집계")
     void saddIgnoresDuplicates() {
         assertEquals(integer(2), run("SADD", "s", "a", "b", "a"));
         assertEquals(integer(1), run("SADD", "s", "b", "c"));
@@ -24,7 +24,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("SISMEMBER 는 있으면 1, 없으면 0 이다")
+    @DisplayName("SISMEMBER - 있으면 1, 없으면 0")
     void sismember() {
         run("SADD", "s", "a");
 
@@ -34,7 +34,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("SREM 으로 마지막 원소를 빼면 키가 사라진다")
+    @DisplayName("SREM 으로 마지막 원소 제거 시 키 소멸")
     void sremRemovesKeyWhenEmpty() {
         run("SADD", "s", "a", "b");
 
@@ -44,7 +44,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("SINTER/SUNION/SDIFF 는 집합 연산 결과를 준다")
+    @DisplayName("SINTER/SUNION/SDIFF - 집합 연산 결과")
     void algebra() {
         run("SADD", "x", "a", "b", "c");
         run("SADD", "y", "b", "c", "d");
@@ -56,7 +56,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("없는 키는 빈 Set 으로 친다")
+    @DisplayName("없는 키는 빈 Set 취급")
     void missingKeyIsEmptySet() {
         run("SADD", "x", "a");
 
@@ -67,7 +67,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("결과가 빈 게 뻔해도 Set 이 아닌 키가 끼면 WRONGTYPE 이다")
+    @DisplayName("결과가 빈 게 뻔해도 Set 이 아닌 키가 끼면 WRONGTYPE")
     void wrongTypeCheckedBeforeShortcut() {
         run("SET", "str", "v");
 
@@ -78,7 +78,7 @@ class SetCommandsTest {
     }
 
     @Test
-    @DisplayName("TYPE 은 set 을 준다")
+    @DisplayName("TYPE - set")
     void type() {
         run("SADD", "s", "a");
         assertEquals(new RespValue.SimpleString("set"), run("TYPE", "s"));

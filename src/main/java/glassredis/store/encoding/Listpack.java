@@ -3,47 +3,21 @@ package glassredis.store.encoding;
 import java.util.Arrays;
 
 /**
- * listpack — 원소 여러 개를 바이트 배열 하나에 빈틈없이 이어 붙인 구조. Redis 7.2 {@code listpack.c} 를 옮겼다.
- *
- * <p>작은 List, Hash, Set, Sorted Set 은 전부 이 안에 들어간다. 원소 하나마다 객체를 만들고 포인터로 잇는
- * 대신 바이트 배열 하나에 몰아넣으니, 원소가 수십 개일 때는 메모리가 몇 분의 일로 줄고 CPU 캐시에도 잘 맞는다.
- * 대신 가운데에 넣거나 빼면 뒤쪽 바이트를 전부 밀어야 하고, 찾을 때는 처음부터 훑어야 한다.
- * 그래서 Redis 는 원소가 적을 때만 이걸 쓰고, 기준을 넘으면 다른 구조로 바꾼다.
- *
- * <h2>바이트 배치</h2>
+ * 원소를 바이트 배열 하나에 이어 붙인 구조 - Redis 7.2 listpack.c
+ * 포인터 대신 배열 오프셋, 없음은 -1
+ * 수정마다 배열을 딱 맞는 크기로 재생성
  * <pre>
- *   [총 바이트 수 4B][원소 수 2B][원소][원소]...[원소][0xFF]
+ *   [총 바이트 4B][원소 수 2B][원소]...[0xFF]    리틀 엔디언
+ *   원소 = [인코딩 + 데이터][backlen]            backlen - 역방향 탐색용 1~5B 길이
  *
- *   원소 하나 = [인코딩 + 데이터][backlen]
+ *   0xxxxxxx                     7비트 양의 정수
+ *   10xxxxxx + 데이터            63B 이하 문자열
+ *   110xxxxx yyyyyyyy            13비트 정수
+ *   1110xxxx yyyyyyyy + 데이터   4095B 이하 문자열
+ *   11110001 ~ 11110100          16/24/32/64비트 정수
+ *   11110000 + 4B + 데이터       긴 문자열
  * </pre>
- * <ul>
- *   <li>숫자는 전부 리틀 엔디언이다.</li>
- *   <li>원소 수가 65535 이상이면 헤더에 65535(모름)를 적고, 필요할 때 끝까지 세어 본다.</li>
- *   <li><b>backlen</b> 은 "인코딩 + 데이터" 부분의 길이를 뒤에서부터 읽을 수 있게 적은 것이다.
- *       이게 있어서 끝에서 앞으로도 걸을 수 있다. 1~5바이트이고, 7비트씩 끊어 적으며
- *       최상위 비트가 1 이면 "앞 바이트에 이어짐"이다.</li>
- * </ul>
- *
- * <h2>원소 인코딩 (첫 바이트로 구분)</h2>
- * <pre>
- *   0xxxxxxx                     0~127 정수              (1B)
- *   10xxxxxx + 데이터            길이 63 이하 문자열     (1B + 길이)
- *   110xxxxx yyyyyyyy            13비트 정수             (2B)
- *   1110xxxx yyyyyyyy + 데이터   길이 4095 이하 문자열   (2B + 길이)
- *   11110001 + 2B                16비트 정수
- *   11110010 + 3B                24비트 정수
- *   11110011 + 4B                32비트 정수
- *   11110100 + 8B                64비트 정수
- *   11110000 + 4B + 데이터       그보다 긴 문자열
- *   11111111                     끝(EOF)
- * </pre>
- * 문자열로 넣어도 {@code "123"} 처럼 정수로 되돌릴 수 있는 모양이면 정수로 담는다. {@code "007"} 은 문자열로 남는다 —
- * 정수로 담으면 꺼낼 때 {@code "7"} 이 되어 원래 바이트를 잃는다.
- *
- * <h2>C 와 다른 점</h2>
- * C 판은 원소를 가리키는 포인터로 다루고, 고칠 때마다 {@code realloc} 으로 배열을 늘리거나 줄인다.
- * 여기서는 포인터 대신 배열 안의 위치(오프셋)를 쓰고, "없음"은 {@code -1} 이다. 배열은 고칠 때마다
- * 딱 맞는 크기로 새로 만든다. 헤더에 적는 총 바이트 수는 C 판과 똑같이 나온다.
+ * 원소 수 65535 이상이면 헤더에 65535(모름) 기록
  */
 public final class Listpack {
 
@@ -51,10 +25,9 @@ public final class Listpack {
     public static final int NUMELE_UNKNOWN = 65535;
     private static final int EOF = 0xFF;
 
-    /** long 을 10진수로 쓸 때의 최대 길이 + 1. 이보다 긴 문자열은 볼 것도 없이 정수가 아니다. */
+    /** long 10진수 표기 최대 길이 + 1 */
     private static final int LONG_STR_SIZE = 21;
 
-    /** 원소 앞에 넣을지, 그 자리를 바꿀지. 뒤에 넣기는 다음 원소 앞에 넣기로 바꿔 처리한다. */
     public enum Where { BEFORE, AFTER, REPLACE }
 
     private byte[] lp;
@@ -68,7 +41,7 @@ public final class Listpack {
 
     // --- 헤더 ---
 
-    /** 헤더에 적힌 총 바이트 수. Redis 가 인코딩을 바꿀지 판단할 때 보는 값이 이것이다. */
+    /** 헤더의 총 바이트 수 - 인코딩 전환 판단용 */
     public int bytes() {
         return (lp[0] & 0xFF) | (lp[1] & 0xFF) << 8 | (lp[2] & 0xFF) << 16 | (lp[3] & 0xFF) << 24;
     }
@@ -89,7 +62,7 @@ public final class Listpack {
         lp[5] = (byte) (value >>> 8);
     }
 
-    /** 원소 수. 헤더에 적혀 있으면 바로, 65535 이상이라 "모름"이면 끝까지 센다. */
+    /** 헤더가 모름(65535)이면 끝까지 계수 */
     public int length() {
         int count = numElements();
         if (count != NUMELE_UNKNOWN) {
@@ -99,14 +72,13 @@ public final class Listpack {
         for (int p = first(); p != -1; p = next(p)) {
             count++;
         }
-        // 다시 세어 보니 헤더에 적을 수 있는 범위면 적어둔다. C 판도 그렇게 한다.
         if (count < NUMELE_UNKNOWN) {
             setNumElements(count);
         }
         return count;
     }
 
-    /** 대시보드가 바이트를 그대로 보여줄 때 쓴다. 고치면 안 된다. */
+    /** 내부 배열 그대로 - 수정 금지 */
     public byte[] rawBytes() {
         return lp;
     }
@@ -121,13 +93,13 @@ public final class Listpack {
         return prev(bytes() - 1);
     }
 
-    /** 오른쪽 원소. 마지막이었으면 -1. */
+    /** 마지막이었으면 -1 */
     public int next(int p) {
         int q = skip(p);
         return (lp[q] & 0xFF) == EOF ? -1 : q;
     }
 
-    /** 왼쪽 원소. 처음이었으면 -1. 바로 앞 원소의 backlen 을 거꾸로 읽어서 간다. */
+    /** 처음이었으면 -1 - 앞 원소의 backlen 역방향 판독 */
     public int prev(int p) {
         if (p == HEADER_SIZE) {
             return -1;
@@ -138,17 +110,14 @@ public final class Listpack {
         return (int) (q - (prevLen - 1));
     }
 
-    /** 원소 하나를 건너뛴 위치. EOF 일 수 있다. */
+    /** EOF 위치 반환 가능 */
     private int skip(int p) {
         long entryLen = currentEncodedSize(p);
         entryLen += encodeBacklen(null, 0, entryLen);
         return (int) (p + entryLen);
     }
 
-    /**
-     * index 번째 원소. 음수면 뒤에서부터. 범위 밖이면 -1.
-     * 절반을 넘는 위치는 뒤에서부터 걷는다 — 이게 backlen 이 있는 이유다.
-     */
+    /** 음수면 뒤에서부터, 범위 밖이면 -1 - 절반 넘으면 뒤에서 탐색 */
     public int seek(long index) {
         boolean forward = true;
         int count = numElements();
@@ -185,20 +154,19 @@ public final class Listpack {
 
     // --- 읽기 ---
 
-    /** 이 원소가 정수 인코딩인지. */
     public boolean isInteger(int p) {
         int b = lp[p] & 0xFF;
         return (b & 0x80) == 0 || (b & 0xE0) == 0xC0 || (b >= 0xF1 && b <= 0xF4);
     }
 
-    /** 정수 인코딩 원소의 값. {@link #isInteger} 가 참일 때만 부른다. */
+    /** isInteger가 참일 때만 호출 */
     public long integer(int p) {
         int b = lp[p] & 0xFF;
         long uval;
         long negStart;
         long negMax;
         if ((b & 0x80) == 0) {
-            return b & 0x7F; // 7비트 정수는 늘 양수다
+            return b & 0x7F;
         } else if ((b & 0xE0) == 0xC0) {
             uval = ((long) (b & 0x1F) << 8) | (lp[p + 1] & 0xFF);
             negStart = 1L << 12;
@@ -216,15 +184,15 @@ public final class Listpack {
             negStart = 1L << 31;
             negMax = 0xFFFFFFFFL;
         } else if (b == 0xF4) {
-            return le(p + 1, 8); // 64비트는 자바 long 과 표현이 같다
+            return le(p + 1, 8);
         } else {
             throw new IllegalStateException("정수 원소가 아닙니다: 0x" + Integer.toHexString(b));
         }
-        // 2의 보수. negStart 이상이면 음수다.
+        // 2의 보수 - negStart 이상이면 음수
         return uval >= negStart ? -(negMax - uval) - 1 : uval;
     }
 
-    /** 원소를 문자열 바이트로. 정수 원소는 10진수 문자열로 바꿔 준다(C 판의 intbuf 경로). */
+    /** 정수 원소는 10진수 문자열로 반환 */
     public byte[] get(int p) {
         if (isInteger(p)) {
             return Long.toString(integer(p)).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
@@ -245,7 +213,7 @@ public final class Listpack {
         return Arrays.copyOfRange(lp, start, start + length);
     }
 
-    /** 원소가 주어진 바이트와 같은지. 정수 원소는 상대를 정수로 해석해서 비교한다(lpCompare). */
+    /** 정수 원소는 s를 정수로 해석해 비교 - lpCompare */
     public boolean equalsAt(int p, byte[] s) {
         if (isInteger(p)) {
             Long value = toInt64(s);
@@ -254,10 +222,7 @@ public final class Listpack {
         return Arrays.equals(get(p), s);
     }
 
-    /**
-     * p 부터 오른쪽으로 s 와 같은 원소를 찾는다. 비교 사이에 {@code skip} 개씩 건너뛴다 —
-     * Hash 는 [필드, 값, 필드, 값] 순이라 skip 1 로 필드만 본다. 없으면 -1.
-     */
+    /** 비교 사이 skip개씩 건너뜀, 없으면 -1 - Hash는 skip 1로 필드만 비교 */
     public int find(int p, byte[] s, int skip) {
         int skipCount = 0;
         while (p != -1) {
@@ -289,7 +254,7 @@ public final class Listpack {
         }
     }
 
-    /** p 에 있는 원소를 지우고, 그 오른쪽 원소의 위치를 준다. 마지막이었으면 -1. */
+    /** 반환값 - 다음 원소 위치, 마지막이었으면 -1 */
     public int delete(int p) {
         return insert(null, p, Where.REPLACE);
     }
@@ -299,12 +264,8 @@ public final class Listpack {
     }
 
     /**
-     * 넣기, 바꾸기, 지우기를 모두 이 하나로 한다(lpInsert). {@code s} 가 {@code null} 이면 지우기다.
-     *
-     * <p>하는 일은 결국 바이트 배열 가운데에 구멍을 내거나 메우는 것이다. 새 원소의 크기를 먼저 계산하고,
-     * 그만큼 뒤쪽 바이트를 밀어낸 뒤 그 자리에 쓴다.
-     *
-     * @return 넣었거나 바꾼 원소의 위치. 지웠을 때는 그 오른쪽 원소의 위치(없으면 -1).
+     * 삽입·교체·삭제 공통 - lpInsert, s가 null이면 삭제
+     * 반환값 - 삽입·교체한 원소 위치, 삭제 시 다음 원소 위치(없으면 -1)
      */
     public int insert(byte[] s, int p, Where where) {
         boolean delete = s == null;
@@ -355,7 +316,7 @@ public final class Listpack {
         return p;
     }
 
-    /** index 부터 num 개를 지운다(lpDeleteRange). */
+    /** lpDeleteRange */
     public void deleteRange(long index, long num) {
         if (num == 0) {
             return;
@@ -369,7 +330,7 @@ public final class Listpack {
             index = count + index;
         }
         if (count != NUMELE_UNKNOWN && count - index <= num) {
-            // 끝까지 지우는 경우: 그 자리에 EOF 를 찍고 잘라내면 끝이다.
+            // 끝까지 삭제 시 그 자리에 EOF 기록 후 절단
             lp = Arrays.copyOf(lp, p + 1);
             lp[p] = (byte) EOF;
             setTotalBytes(p + 1);
@@ -379,7 +340,7 @@ public final class Listpack {
         deleteRangeWithEntry(p, num);
     }
 
-    /** p 부터 num 개를 지우고, 그 자리(다음 원소)의 위치를 준다. 끝까지 지웠으면 -1. */
+    /** 반환값 - 다음 원소 위치, 끝까지 삭제 시 -1 */
     public int deleteRangeWithEntry(int p, long num) {
         if (num == 0) {
             return p;
@@ -408,7 +369,7 @@ public final class Listpack {
 
     // --- 인코딩 ---
 
-    /** 원소 하나를 "인코딩 + 데이터" 바이트로 만든다(lpEncodeGetType + lpEncodeString). */
+    /** backlen 제외 인코딩 + 데이터 - lpEncodeGetType, lpEncodeString */
     static byte[] encode(byte[] s) {
         Long value = toInt64(s);
         if (value != null) {
@@ -437,7 +398,7 @@ public final class Listpack {
         return out;
     }
 
-    /** 정수를 가장 짧은 정수 인코딩으로(lpEncodeIntegerGetType). */
+    /** lpEncodeIntegerGetType */
     static byte[] encodeInteger(long v) {
         if (v >= 0 && v <= 127) {
             return new byte[] {(byte) v};
@@ -462,16 +423,15 @@ public final class Listpack {
         return out;
     }
 
-    /** 이 바이트들을 넣으면 listpack 에서 몇 바이트를 차지할지(인코딩 + 데이터 + backlen). */
+    /** backlen 포함 원소 크기 */
     public static int entrySize(byte[] s) {
         int encLen = encode(s).length;
         return encLen + (int) encodeBacklen(null, 0, encLen);
     }
 
     /**
-     * backlen 을 쓴다. {@code buf} 가 {@code null} 이면 필요한 바이트 수만 센다.
-     * 앞쪽 바이트일수록 상위 비트이고, 첫 바이트를 뺀 나머지는 최상위 비트를 1 로 세운다.
-     * 뒤에서부터 읽다가 최상위 비트가 0 인 바이트를 만나면 거기가 시작이다.
+     * backlen 기록 후 바이트 수 반환 - buf가 null이면 계수만
+     * 7비트씩 상위부터 기록, 첫 바이트 외 나머지는 최상위 비트 1
      */
     static long encodeBacklen(byte[] buf, int at, long l) {
         if (l <= 127) {
@@ -511,7 +471,7 @@ public final class Listpack {
         return 5;
     }
 
-    /** p 는 backlen 의 마지막 바이트. 거기서 왼쪽으로 읽는다. */
+    /** p는 backlen의 마지막 바이트 - 왼쪽으로 판독 */
     private long decodeBacklen(int p) {
         long val = 0;
         int shift = 0;
@@ -528,7 +488,7 @@ public final class Listpack {
         }
     }
 
-    /** 원소의 "인코딩 + 데이터" 길이(backlen 제외). */
+    /** backlen 제외 길이 */
     private long currentEncodedSize(int p) {
         int b = lp[p] & 0xFF;
         if ((b & 0x80) == 0) return 1;
@@ -553,8 +513,8 @@ public final class Listpack {
     }
 
     /**
-     * 되돌렸을 때 원래 바이트와 똑같아지는 표기만 정수로 본다(lpStringToInt64 = string2ll).
-     * {@code "007"}, {@code "+1"}, {@code "-0"}, {@code " 1"} 은 정수가 아니다. 아니면 {@code null}.
+     * 되돌렸을 때 같은 바이트가 되는 표기만 정수 인정 - string2ll, 아니면 null
+     * "007", "+1", "-0", " 1"은 정수 아님
      */
     public static Long toInt64(byte[] s) {
         int len = s.length;
@@ -576,7 +536,7 @@ public final class Listpack {
         if (s[i] < '1' || s[i] > '9') {
             return null;
         }
-        // 부호 없는 64비트로 쌓는다. 자바에는 unsigned long 이 없어서 Long 의 unsigned 연산을 쓴다.
+        // 2^63까지 담기 위해 부호 없는 64비트로 누적
         long v = s[i++] - '0';
         while (i < len && s[i] >= '0' && s[i] <= '9') {
             if (Long.compareUnsigned(v, Long.divideUnsigned(-1L, 10)) > 0) {

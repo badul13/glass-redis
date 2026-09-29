@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SkipListTest {
 
-    /** 비교 기준이 되는 정답. 느리지만 틀릴 일이 없는 정렬 집합이다. */
+    /** 대조용 정답 모델 */
     private record Item(double score, byte[] member) {
     }
 
@@ -29,7 +29,7 @@ class SkipListTest {
     private final SkipList list = new SkipList();
 
     @Test
-    @DisplayName("점수 순으로, 점수가 같으면 멤버 사전순으로 늘어선다")
+    @DisplayName("점수 순 정렬, 점수가 같으면 멤버 사전순")
     void orderByScoreThenMember() {
         list.insert(2, bytes("b"));
         list.insert(1, bytes("z"));
@@ -40,7 +40,7 @@ class SkipListTest {
     }
 
     @Test
-    @DisplayName("rank 와 byRank 는 1부터 세고, 없으면 0 과 null 이다")
+    @DisplayName("rank 와 byRank 는 1부터 시작, 없으면 0 과 null")
     void rankAndByRank() {
         list.insert(10, bytes("a"));
         list.insert(20, bytes("b"));
@@ -54,7 +54,7 @@ class SkipListTest {
     }
 
     @Test
-    @DisplayName("delete 는 점수와 멤버가 둘 다 맞을 때만 지운다")
+    @DisplayName("delete - 점수와 멤버가 둘 다 맞을 때만 삭제")
     void deleteNeedsExactScore() {
         list.insert(1, bytes("a"));
 
@@ -66,7 +66,7 @@ class SkipListTest {
     }
 
     @Test
-    @DisplayName("점수 구간의 첫 노드와 마지막 노드를 찾는다")
+    @DisplayName("점수 구간의 첫 노드와 마지막 노드 탐색")
     void scoreRangeEnds() {
         for (int i = 1; i <= 5; i++) {
             list.insert(i, bytes("m" + i));
@@ -84,12 +84,9 @@ class SkipListTest {
         assertNull(list.lastInRange(new ScoreRange(3, true, 3, false)));
     }
 
-    /**
-     * 무작위로 넣고 빼면서 매번 정답과 맞춰 본다. 층수가 무작위라 손으로 짠 예제로는
-     * span 계산이 틀리는 경우를 다 밟기 어렵다. 순위가 한 번이라도 어긋나면 span 이 틀린 것이다.
-     */
+    /** 층수가 무작위 - 손으로 짠 예제만으로는 span 오류 검출 한계 */
     @Test
-    @DisplayName("무작위로 넣고 빼도 순위와 순서가 정답과 같다")
+    @DisplayName("무작위 넣기·빼기 후에도 순위와 순서가 정답과 동일")
     void matchesReferenceUnderRandomOperations() {
         SplittableRandom random = new SplittableRandom(42);
         TreeSet<Item> reference = new TreeSet<>(ORDER);
@@ -97,7 +94,7 @@ class SkipListTest {
 
         for (int step = 0; step < 5_000; step++) {
             if (present.isEmpty() || random.nextInt(3) != 0) {
-                // 점수 범위를 좁게 잡아 같은 점수가 자주 나오게 한다. 멤버 비교 경로도 밟아야 한다.
+                // 같은 점수가 자주 나오도록 범위를 좁혀 멤버 비교 경로까지 검증
                 Item item = new Item(random.nextInt(50), bytes("m" + random.nextInt(100_000)));
                 if (reference.add(item)) {
                     list.insert(item.score(), item.member());

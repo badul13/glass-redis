@@ -8,18 +8,17 @@ import type {
   RemovalReason,
 } from './types'
 
-/** 스트림에 남겨두는 줄 수. 넘으면 오래된 것부터 버린다 — 서버 버퍼와 같은 이유다. */
+/** 초과 시 오래된 줄부터 폐기 */
 const MAX_ROWS = 400
 
-/** 만료 패널이 그리는 최근 주기 수. 100ms 주기니까 최근 6초쯤이 보인다. */
+/** 100ms 주기 기준 약 6초 분량 */
 const MAX_CYCLES = 60
 
-/** 최근 사라진 키 목록의 길이. */
 const MAX_REMOVALS = 40
 
 export type Status = 'connecting' | 'live' | 'offline'
 
-/** 스트림에 그리는 한 줄. 이벤트이거나, 못 받고 지나간 자리를 표시하는 줄이다. */
+/** gap - 서버가 버린 자리 표시 줄 */
 export type Row = { kind: 'event'; event: ActivityEvent } | { kind: 'gap'; id: number; dropped: number }
 
 export interface Dashboard {
@@ -49,7 +48,6 @@ type Action =
   | { type: 'activity'; batch: ActivityBatch }
   | { type: 'keyspace'; snapshot: KeyspaceSnapshot }
 
-/** 뒤에서부터 limit 개만 남긴다. */
 function tail<T>(items: T[], limit: number): T[] {
   return items.length <= limit ? items : items.slice(items.length - limit)
 }
@@ -67,7 +65,6 @@ function reduce(state: Dashboard, action: Action): Dashboard {
 
       const rows = [...state.rows]
       if (dropped > 0) {
-        // 끊긴 자리를 눈에 보이게 남긴다. 조용히 넘어가면 화면에 보이는 것이 전부라고 착각하게 된다.
         rows.push({ kind: 'gap', id: events[0]?.seq ?? state.droppedTotal, dropped })
       }
 
@@ -78,7 +75,7 @@ function reduce(state: Dashboard, action: Action): Dashboard {
 
       for (const event of events) {
         if (event.type === 'expiryCycle') {
-          // 만료 주기는 초당 10번까지 올 수 있다. 스트림에 섞으면 다른 줄이 다 밀려나므로 패널에서만 그린다.
+          // 초당 최대 10회 수신 - 스트림에 섞으면 다른 줄을 밀어내므로 패널에만 표시
           cycles.push(event)
           continue
         }
@@ -104,12 +101,7 @@ function reduce(state: Dashboard, action: Action): Dashboard {
   }
 }
 
-/**
- * 서버가 밀어주는 스트림에 붙어서 화면이 그릴 상태를 들고 있는다.
- *
- * <p>EventSource 는 연결이 끊기면 알아서 다시 붙는다. 그래서 재접속 로직을 따로 쓰지 않고
- * 상태 표시만 바꾼다.
- */
+/** 재접속은 EventSource 자동 처리 - 상태 표시만 갱신 */
 export function useEventStream(): Dashboard {
   const [state, dispatch] = useReducer(reduce, EMPTY)
 
@@ -119,7 +111,7 @@ export function useEventStream(): Dashboard {
     source.onopen = () => dispatch({ type: 'status', status: 'live' })
     source.onerror = () => dispatch({ type: 'status', status: 'offline' })
 
-    // 이름 붙은 이벤트라서 onmessage 로는 오지 않는다.
+    // 이름 붙은 이벤트는 onmessage 수신 대상 아님
     source.addEventListener('activity', (event) => {
       dispatch({ type: 'activity', batch: JSON.parse(event.data) as ActivityBatch })
     })

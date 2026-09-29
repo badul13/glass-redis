@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IntsetTest {
 
     @Test
-    @DisplayName("정렬된 채로 담고, 중복은 받지 않는다")
+    @DisplayName("정렬 상태로 저장, 중복 거부")
     void sortedAndUnique() {
         Intset set = new Intset();
         assertTrue(set.add(3));
@@ -28,7 +28,7 @@ class IntsetTest {
     }
 
     @Test
-    @DisplayName("폭에 안 맞는 값이 오면 전체를 넓은 폭으로 다시 쓰고, 지워도 좁아지지 않는다")
+    @DisplayName("폭에 안 맞는 값이 오면 전체를 넓은 폭으로 재작성 - 지워도 폭 유지")
     void upgradeIsOneWay() {
         Intset set = new Intset();
         set.add(1);
@@ -60,7 +60,7 @@ class IntsetTest {
     }
 
     @Test
-    @DisplayName("무작위로 넣고 빼도 TreeSet 과 같다")
+    @DisplayName("무작위 넣기·빼기 결과가 TreeSet 과 동일")
     void matchesReference() {
         SplittableRandom random = new SplittableRandom(3);
         Intset set = new Intset();

@@ -7,16 +7,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * List. 작을 때는 listpack 하나, 커지면 quicklist(listpack 을 이은 리스트)에 담는다. Redis 7.2 {@code t_list.c} 의
- * 인코딩 전환 규칙을 따른다.
- *
- * <ul>
- *   <li><b>listpack → quicklist</b>: 넣기 <b>전에</b> "지금 listpack 바이트 + 넣을 원소들의 길이 합"이
- *       8192 를 넘을지 본다. 넘으면 지금 listpack 을 quicklist 의 첫 노드로 삼아 바꾼다.</li>
- *   <li><b>quicklist → listpack</b>: 빼고 난 <b>뒤에</b>, 노드가 하나만 남았고 그 크기가 절반(4096) 이하면
- *       되돌린다. 기준을 절반으로 잡은 건 경계에서 넣고 빼기를 반복할 때 매번 바뀌지 않게 하려는 것이다.</li>
- * </ul>
- * 두 인코딩은 명령 쪽에서 보이지 않는다. 명령은 이 클래스의 메서드만 쓴다(Redis 의 listType* 함수들에 해당).
+ * List - t_list.c listType*
+ * 작을 때 listpack 하나, 커지면 quicklist
+ * 복귀 기준은 절반 크기 - 경계에서 인코딩 왕복 방지
  */
 public final class ListValue implements Value {
 
@@ -42,7 +35,7 @@ public final class ListValue implements Value {
         return quicklist == null ? listpack.length() : quicklist.count();
     }
 
-    /** 이 원소들을 넣기 전에 부른다. 넣으면 너무 커질 listpack 이면 quicklist 로 바꿔 둔다. */
+    /** 삽입 전 호출 - 삽입 후 노드 한도 초과 예상 시 미리 quicklist 전환 */
     public void prepareForAppend(List<byte[]> values) {
         if (quicklist != null) {
             return;
@@ -74,7 +67,7 @@ public final class ListValue implements Value {
         }
     }
 
-    /** 비었으면 {@code null}. 줄어든 뒤의 인코딩 전환은 {@link #afterShrink} 가 한다. */
+    /** 비었으면 null - 인코딩 전환은 afterShrink 담당 */
     public byte[] pop(boolean head) {
         if (quicklist != null) {
             return quicklist.pop(head);
@@ -88,7 +81,7 @@ public final class ListValue implements Value {
         return value;
     }
 
-    /** 범위 밖이면 {@code null}. 음수는 뒤에서부터. */
+    /** 범위 밖이면 null, 음수는 뒤에서부터 */
     public byte[] index(long index) {
         if (quicklist != null) {
             return quicklist.index(index);
@@ -97,7 +90,7 @@ public final class ListValue implements Value {
         return p == -1 ? null : listpack.get(p);
     }
 
-    /** start..end(포함). 범위는 부르는 쪽이 잘라 맞췄다. */
+    /** start..end 양 끝 포함 - 범위 보정은 호출 측 책임 */
     public List<byte[]> range(long start, long end) {
         if (quicklist != null) {
             return quicklist.range(start, end);
@@ -111,7 +104,6 @@ public final class ListValue implements Value {
         return out;
     }
 
-    /** 같은 원소를 앞에서(fromTail 이면 뒤에서) 최대 limit 개 지운다. */
     public long remove(byte[] value, long limit, boolean fromTail) {
         if (quicklist != null) {
             return quicklist.removeMatching(value, limit, fromTail);
@@ -130,7 +122,7 @@ public final class ListValue implements Value {
         return removed;
     }
 
-    /** 앞에서 left 개, 뒤에서 right 개를 잘라낸다(LTRIM). */
+    /** 앞에서 left개, 뒤에서 right개 제거 */
     public void trim(long left, long right) {
         if (quicklist != null) {
             quicklist.deleteRange(0, left);
@@ -141,10 +133,7 @@ public final class ListValue implements Value {
         }
     }
 
-    /**
-     * 원소를 뺀 뒤에 부른다. quicklist 에 노드가 하나만 남았고 그게 절반 크기 이하면 listpack 으로 되돌린다
-     * (listTypeTryConvertQuicklist, shrinking).
-     */
+    /** 삭제 후 호출, 노드 하나 남고 절반 크기 이하면 listpack 복귀 - listTypeTryConvertQuicklist */
     public void afterShrink() {
         if (quicklist == null || quicklist.nodeCount() != 1) {
             return;
@@ -157,7 +146,6 @@ public final class ListValue implements Value {
         quicklist = null;
     }
 
-    /** 대시보드용. listpack 이면 하나짜리, quicklist 면 노드마다 하나. */
     public List<Listpack> nodes() {
         if (quicklist == null) {
             return List.of(listpack);

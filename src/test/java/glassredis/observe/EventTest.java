@@ -12,15 +12,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * 이벤트를 만들 때 값이 화면에 그릴 수 있는 형태로 줄어드는지 본다.
- *
- * <p>여기서 줄이지 않으면 버퍼가 값 크기에 비례해 부풀고, 대시보드는 수 MB 짜리 줄을 받게 된다.
- */
+/** 이벤트 생성 시 값이 표시용 길이로 줄어드는지 확인 */
 class EventTest {
 
     @Test
-    @DisplayName("긴 값은 잘라서 담는다")
+    @DisplayName("긴 값은 잘라서 저장")
     void truncatesLongValues() {
         String rendered = arguments("x".repeat(1000));
 
@@ -29,7 +25,7 @@ class EventTest {
     }
 
     @Test
-    @DisplayName("인자가 많으면 앞의 몇 개만 보여주고 나머지는 개수로 알린다")
+    @DisplayName("인자가 많으면 앞의 몇 개만 표시, 나머지는 개수로 표기")
     void summarisesExtraArguments() {
         String[] args = new String[Display.MAX_ARGUMENTS + 3];
         for (int i = 0; i < args.length; i++) {
@@ -43,31 +39,31 @@ class EventTest {
     }
 
     @Test
-    @DisplayName("제어문자는 점으로 바꾼다 — 한 줄짜리 스트림에 개행이 섞이면 표가 깨진다")
+    @DisplayName("제어문자는 점으로 치환 - 한 줄짜리 스트림에 개행이 섞이면 표 깨짐")
     void replacesControlCharacters() {
         assertEquals("a.b", arguments("a\nb"));
     }
 
     @Test
-    @DisplayName("한글은 그대로 둔다")
+    @DisplayName("한글은 그대로 유지")
     void keepsNonAsciiText() {
         assertEquals("안녕 세계", arguments("안녕 세계"));
     }
 
     @Test
-    @DisplayName("한 글자를 두 자리로 표현하는 값이 잘려도 깨진 문자를 남기지 않는다")
+    @DisplayName("두 자리로 표현되는 글자가 잘려도 깨진 문자 없음")
     void neverLeavesHalfOfACharacter() {
-        // 이모지는 char 두 개로 표현된다. 앞에 한 글자를 붙여 자르는 자리가 그 둘 사이에 오게 만든다.
+        // 이모지는 char 두 개 - 앞에 한 글자를 붙여 자르는 위치를 서로게이트 쌍 사이로 조정
         String rendered = arguments("a" + "\uD83D\uDE00".repeat(Display.MAX_TEXT_LENGTH / 2));
 
         assertTrue(rendered.endsWith("…"), rendered);
-        // 짝을 잃은 자리가 남아 있으면 UTF-8 로 바꿀 때 '?' 로 뭉개져 되돌려도 원래 문자열과 달라진다.
+        // 짝 잃은 서로게이트는 UTF-8 왕복에서 '?' 로 변환
         assertEquals(rendered, new String(rendered.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8),
                 "잘린 자리에 깨진 문자가 남았다: " + rendered);
     }
 
     @Test
-    @DisplayName("응답은 RESP 타입 기호를 살려 한 줄로 줄인다")
+    @DisplayName("응답은 RESP 타입 기호를 살려 한 줄로 축약")
     void rendersReplyByType() {
         assertEquals("+OK", reply(RespValue.OK));
         assertEquals(":42", reply(new RespValue.Int(42)));
@@ -78,7 +74,7 @@ class EventTest {
     }
 
     @Test
-    @DisplayName("사라진 키도 같은 규칙으로 줄인다")
+    @DisplayName("사라진 키도 같은 규칙으로 축약")
     void rendersRemovedKey() {
         Event.KeyRemoved removed = Event.keyRemoved("k".repeat(1000).getBytes(StandardCharsets.UTF_8),
                 RemovalReason.ACTIVE_EXPIRED, 30);

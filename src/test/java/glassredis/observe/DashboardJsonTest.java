@@ -9,16 +9,11 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * 브라우저로 나가는 JSON 의 모양을 못박아 둔다.
- *
- * <p>화면 쪽 타입 정의(dashboard/src/types.ts)가 이 모양을 그대로 옮겨 적은 것이라,
- * 여기서 필드 이름이 바뀌면 화면이 조용히 빈칸을 그리게 된다.
- */
+/** 필드 이름은 dashboard/src/types.ts 와 일치 필요 */
 class DashboardJsonTest {
 
     @Test
-    @DisplayName("명령 이벤트는 순번, 시각, 종류와 함께 나간다")
+    @DisplayName("명령 이벤트 - 순번, 시각, 종류 포함")
     void serialisesCommand() {
         String json = DashboardJson.activity(List.of(record(7, new Event.CommandExecuted(3, "SET", "k v", 1234, "+OK"))), 0);
 
@@ -27,7 +22,7 @@ class DashboardJsonTest {
     }
 
     @Test
-    @DisplayName("사라진 키는 이유와 늦은 시간을 함께 싣는다")
+    @DisplayName("사라진 키 - 이유와 지연 시간 포함")
     void serialisesKeyRemoval() {
         String json = DashboardJson.activity(
                 List.of(record(1, new Event.KeyRemoved("k", RemovalReason.ACTIVE_EXPIRED, 37))), 0);
@@ -60,13 +55,13 @@ class DashboardJsonTest {
     }
 
     @Test
-    @DisplayName("버린 개수는 이벤트가 하나도 없어도 실어 보낸다 — 화면이 끊긴 자리를 표시해야 한다")
+    @DisplayName("버린 개수는 이벤트가 없어도 전송 - 화면에 끊긴 자리 표시용")
     void reportsDroppedCount() {
         assertEquals("{\"dropped\":128,\"events\":[]}", DashboardJson.activity(List.of(), 128));
     }
 
     @Test
-    @DisplayName("값에 든 따옴표와 역슬래시를 이스케이프한다 — 안 하면 스트림 전체가 깨진다")
+    @DisplayName("값 속 따옴표와 역슬래시 이스케이프 - 누락 시 스트림 전체 손상")
     void escapesDangerousCharacters() {
         String json = DashboardJson.activity(
                 List.of(record(1, new Event.KeyRemoved("따\"옴\\표", RemovalReason.DELETED, 0))), 0);

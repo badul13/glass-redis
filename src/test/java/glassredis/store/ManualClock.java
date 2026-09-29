@@ -3,7 +3,7 @@ package glassredis.store;
 import java.time.Instant;
 import java.time.InstantSource;
 
-/** 테스트용 시계. 손으로 돌리기 전에는 시간이 흐르지 않는다. */
+/** 테스트용 시계 - 수동으로 돌리기 전에는 시간 정지 */
 public final class ManualClock implements InstantSource {
 
     private long millis;

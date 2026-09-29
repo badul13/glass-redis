@@ -10,39 +10,20 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * 바이트 스트림에서 RESP 를 읽어낸다.
- *
- * <p>TCP 는 "메시지"가 아니라 "바이트 흐름"만 보장한다. 클라이언트가 한 번에 보낸 명령이
- * 여러 조각으로 쪼개져 도착할 수도 있고, 여러 명령이 한 덩어리로 붙어 올 수도 있다.
- * 그래서 어디까지가 한 명령인지는 응용 프로토콜이 정해야 하고, RESP 는 그걸
- * 길이 접두어와 CRLF 로 정한다. 이 클래스가 그 규칙을 해석하는 자리다.
- *
- * <p>서버가 실제로 쓰는 입구는 {@link #readCommand()} 하나다.
- * 명령은 두 가지 형태로 들어올 수 있다.
- *
- * <ul>
- *   <li><b>배열 형식</b> — 정상적인 클라이언트(redis-cli 등)가 쓰는 형태.
- *       {@code *2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n}</li>
- *   <li><b>인라인 형식</b> — telnet 처럼 손으로 칠 때. {@code ECHO hello\r\n}<br>
- *       어떤 명령도 {@code *} 로 시작하지 않기 때문에, 첫 바이트가 {@code *} 가 아니면
- *       인라인이라고 판단할 수 있다. 프로토콜 스펙에 정식으로 있는 기능이다.</li>
- * </ul>
- *
- * <p>{@link #readValue()} 는 임의의 RESP 값을 읽는다. 지금은 테스트에서 쓰고,
- * 나중에 레플리카가 마스터의 응답을 읽을 때 다시 쓰게 된다.
+ * RESP 읽기 - 배열 형식(*2\r\n$4\r\nECHO...) + 인라인 형식(ECHO hello\r\n)
+ * 첫 바이트가 * 아니면 인라인
  */
 public final class RespReader {
 
-    /** 벌크 문자열 최대 길이. 실제 Redis 의 기본값(proto-max-bulk-len)과 같은 512MB. */
+    /** proto-max-bulk-len 기본값 */
     public static final int MAX_BULK_LENGTH = 512 * 1024 * 1024;
 
-    /** 명령 배열의 최대 원소 수. */
     public static final int MAX_ARRAY_LENGTH = 1024 * 1024;
 
-    /** 인라인 명령 한 줄의 최대 길이. 줄바꿈 없이 무한정 보내는 클라이언트를 막는다. */
+    /** 줄바꿈 없이 계속 보내는 클라이언트 차단 */
     public static final int MAX_INLINE_LENGTH = 64 * 1024;
 
-    /** 숫자 헤더 줄({@code $123}, {@code *2})의 최대 길이. */
+    /** $123, *2 같은 숫자 줄의 최대 길이 */
     private static final int MAX_NUMBER_LINE = 32;
 
     private final InputStream in;
@@ -52,16 +33,15 @@ public final class RespReader {
     }
 
     /**
-     * 명령 하나를 argv 형태로 읽는다. argv[0] 이 명령 이름, 나머지가 인자다.
+     * 명령 하나를 argv로 읽기
      *
-     * @return 스트림이 정상적으로 끝나면(클라이언트가 끊으면) {@code null}.
-     *         빈 줄이나 빈 배열이면 빈 리스트 — 호출한 쪽에서 그냥 건너뛰면 된다.
-     * @throws RespProtocolException 프레이밍이 깨져서 더 읽을 수 없을 때
+     * @return 클라이언트 끊김 시 null, 빈 줄·빈 배열이면 빈 리스트
+     * @throws RespProtocolException 프레이밍 손상 시
      */
     public List<byte[]> readCommand() throws IOException {
         int first = in.read();
         if (first == -1) {
-            return null; // EOF: 클라이언트가 커넥션을 닫았다
+            return null;
         }
         if (first == '*') {
             return readArrayCommand();
@@ -69,7 +49,7 @@ public final class RespReader {
         return readInlineCommand(first);
     }
 
-    /** 임의의 RESP 값 하나를 읽는다. EOF 면 {@code null}. */
+    /** EOF면 null */
     public RespValue readValue() throws IOException {
         int type = in.read();
         if (type == -1) {
@@ -78,9 +58,7 @@ public final class RespReader {
         return readValue(type);
     }
 
-    // --- 명령 파싱 -------------------------------------------------------
-
-    /** {@code *} 를 이미 읽은 상태에서 호출된다. */
+    /** * 읽은 뒤 호출 */
     private List<byte[]> readArrayCommand() throws IOException {
         long count = readNumberLine();
         if (count < 0 || count > MAX_ARRAY_LENGTH) {
@@ -92,7 +70,6 @@ public final class RespReader {
             if (type == -1) {
                 throw new RespProtocolException("unexpected end of stream in multibulk");
             }
-            // 클라이언트가 보내는 명령의 원소는 반드시 벌크 문자열이어야 한다.
             if (type != '$') {
                 throw new RespProtocolException("expected a bulk string, got type byte " + describe(type));
             }
@@ -105,15 +82,10 @@ public final class RespReader {
         return argv;
     }
 
-    /**
-     * 인라인 명령. 첫 바이트는 이미 읽었으므로 되돌려 붙인 뒤 공백으로 자른다.
-     *
-     * <p>실제 Redis 는 인라인에서도 따옴표 처리를 하지만, 여기서는 공백 분리까지만 한다.
-     * 인라인은 손으로 찔러보는 용도이므로 그걸로 충분하다.
-     */
+    /** 공백 기준 분리만 - Redis와 달리 따옴표 미처리 */
     private List<byte[]> readInlineCommand(int firstByte) throws IOException {
         if (firstByte == '\n' || firstByte == '\r') {
-            return List.of(); // 그냥 엔터만 친 경우
+            return List.of();
         }
         byte[] rest = readLine(MAX_INLINE_LENGTH);
         byte[] line = new byte[rest.length + 1];
@@ -137,8 +109,6 @@ public final class RespReader {
         return argv;
     }
 
-    // --- 값 파싱 ---------------------------------------------------------
-
     private RespValue readValue(int type) throws IOException {
         return switch (type) {
             case '+' -> new RespValue.SimpleString(readTextLine());
@@ -151,7 +121,7 @@ public final class RespReader {
             case '*' -> {
                 long count = readNumberLine();
                 if (count == -1) {
-                    yield RespValue.NIL; // 널 배열 *-1
+                    yield RespValue.NIL; // *-1
                 }
                 if (count < 0 || count > MAX_ARRAY_LENGTH) {
                     throw new RespProtocolException("invalid multibulk length");
@@ -170,18 +140,13 @@ public final class RespReader {
         };
     }
 
-    /**
-     * {@code $} 를 읽은 뒤의 본문. {@code <길이>\r\n<데이터>\r\n} 을 소비한다.
-     *
-     * @return 길이가 -1(널 벌크 문자열)이면 {@code null}
-     */
+    /** $ 뒤의 <길이>\r\n<데이터>\r\n - 길이 -1이면 null */
     private byte[] readBulkBody() throws IOException {
         long length = readNumberLine();
         if (length == -1) {
             return null;
         }
-        // 길이 검사를 여기서 해야 한다. 검사 없이 new byte[length] 를 하면
-        // 헤더 한 줄로 서버를 OutOfMemoryError 로 죽일 수 있다.
+        // 할당 전 검사 - 헤더 한 줄로 OOM 유발 가능
         if (length < 0 || length > MAX_BULK_LENGTH) {
             throw new RespProtocolException("invalid bulk length");
         }
@@ -191,9 +156,7 @@ public final class RespReader {
         return data;
     }
 
-    // --- 바이트 수준 유틸 -------------------------------------------------
-
-    /** CRLF 까지 한 줄을 읽어 종결자를 뺀 바이트를 준다. LF 만 와도 받아준다. */
+    /** 종결자 뺀 한 줄 - LF 단독도 허용 */
     private byte[] readLine(int limit) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream(32);
         while (true) {
@@ -219,7 +182,6 @@ public final class RespReader {
         return new String(readLine(MAX_INLINE_LENGTH), StandardCharsets.UTF_8);
     }
 
-    /** {@code $}, {@code *}, {@code :} 뒤에 오는 숫자 줄. */
     private long readNumberLine() throws IOException {
         String text = new String(readLine(MAX_NUMBER_LINE), StandardCharsets.US_ASCII);
         if (text.isEmpty()) {
@@ -232,13 +194,7 @@ public final class RespReader {
         }
     }
 
-    /**
-     * 길이를 아는 데이터는 한 번에 읽는다. 내용을 한 바이트씩 훑을 필요가 전혀 없다 —
-     * 길이 접두어 프로토콜의 핵심 이점이 이것이다.
-     *
-     * <p>{@code read} 한 번이 요청한 만큼을 다 채워준다는 보장이 없으므로 루프로 감싼다.
-     * TCP 는 바이트 흐름이라 데이터가 나눠서 도착하는 게 정상이다.
-     */
+    /** read 1회로 다 채운다는 보장 없음 - 루프 */
     private void readFully(byte[] destination) throws IOException {
         int offset = 0;
         while (offset < destination.length) {

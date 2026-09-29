@@ -12,11 +12,8 @@ import glassredis.store.ListValue;
 import java.util.List;
 
 /**
- * {@code LPUSH key element [element ...]} / {@code RPUSH key element [element ...]}
- * — List 의 앞(왼쪽) 또는 뒤(오른쪽)에 넣고, 넣은 뒤의 길이를 준다. 키가 없으면 새 List 를 만든다.
- *
- * <p>원소를 여러 개 주면 적은 순서대로 하나씩 넣는다. 그래서 {@code LPUSH k a b c} 의 결과는
- * {@code [c, b, a]} 다. 한 덩어리로 앞에 붙는 게 아니다.
+ * LPUSH/RPUSH key element [element ...] - 삽입 후 길이
+ * 하나씩 차례로 삽입 - LPUSH k a b c 결과는 [c, b, a]
  */
 public final class PushCommand implements Command {
 
@@ -61,7 +58,7 @@ public final class PushCommand implements Command {
         }
 
         List<byte[]> values = args.subList(1, args.size());
-        // 넣기 전에 한 번에 본다. 다 넣으면 listpack 이 8KB 를 넘을 것 같으면 먼저 quicklist 로 바꿔 둔다.
+        // 전부 넣었을 때 8KB 초과 예상 시 quicklist로 선전환
         list.prepareForAppend(values);
         for (byte[] value : values) {
             list.push(value, left);

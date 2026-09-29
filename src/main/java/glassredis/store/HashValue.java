@@ -7,20 +7,15 @@ import java.util.List;
 import java.util.function.BiConsumer;
 
 /**
- * Hash. 작을 때는 listpack 에 {@code [필드, 값, 필드, 값, ...]} 으로, 커지면 dict(해시 테이블)에 담는다.
- * Redis 7.2 {@code t_hash.c} 의 규칙을 따르고, 기준값은 실제 Redis 7.4 의 기본 설정이다.
- *
- * <ul>
- *   <li>필드나 값 중 하나라도 64바이트({@code hash-max-listpack-value})를 넘으면 hashtable 로 바꾼다.</li>
- *   <li>필드가 512개({@code hash-max-listpack-entries})를 넘으면 hashtable 로 바꾼다.
- *       한 명령으로 512쌍을 넘게 넣으면 넣기 전에 바로 바꾼다.</li>
- *   <li>한 번 hashtable 이 되면 줄어도 돌아가지 않는다.</li>
- * </ul>
- * listpack 에서 필드를 찾을 때는 처음부터 훑는다. 원소가 적을 때는 해시를 계산하는 것보다 이게 빠르다.
+ * Hash - t_hash.c
+ * 작을 때 listpack에 [필드, 값, ...], 커지면 dict
+ * hashtable 전환 후 줄어도 복귀 없음
  */
 public final class HashValue implements Value {
 
+    /** hash-max-listpack-entries */
     static final int MAX_LISTPACK_ENTRIES = 512;
+    /** hash-max-listpack-value */
     static final int MAX_LISTPACK_VALUE = 64;
 
     private Listpack listpack = new Listpack();
@@ -41,10 +36,7 @@ public final class HashValue implements Value {
         return dict == null ? listpack.length() / 2 : (int) dict.size();
     }
 
-    /**
-     * HSET 이 넣기 전에 부른다(hashTypeTryConversion). 인자는 [필드, 값, 필드, 값, ...] 이다.
-     * 쌍이 512개를 넘거나 64바이트를 넘는 게 하나라도 있으면 미리 hashtable 로 바꾼다.
-     */
+    /** HSET 삽입 전 호출 - hashTypeTryConversion, 인자는 [필드, 값, ...] */
     public void prepareForSet(List<byte[]> fieldsAndValues) {
         if (dict != null) {
             return;
@@ -75,10 +67,10 @@ public final class HashValue implements Value {
         return dict != null ? dict.containsKey(field) : findField(field) != -1;
     }
 
-    /** 넣거나 바꾼다. 새 필드였으면 {@code true}(hashTypeSet). */
+    /** 새 필드면 true - hashTypeSet */
     public boolean set(Key field, byte[] value) {
         if (dict == null && (field.bytes().length > MAX_LISTPACK_VALUE || value.length > MAX_LISTPACK_VALUE)) {
-            // HSET 은 prepareForSet 에서 이미 걸렀다. HINCRBY 처럼 그 단계가 없는 명령이 여기서 걸린다.
+            // prepareForSet 안 거치는 HINCRBY 등의 전환 지점
             convertToDict();
         }
         if (dict != null) {
@@ -97,7 +89,7 @@ public final class HashValue implements Value {
         return true;
     }
 
-    /** 지웠으면 {@code true}. hashtable 이면 지운 뒤 너무 비었을 때 테이블을 줄인다. */
+    /** 삭제 시 true */
     public boolean delete(Key field) {
         if (dict != null) {
             boolean deleted = dict.remove(field);
@@ -114,7 +106,7 @@ public final class HashValue implements Value {
         return true;
     }
 
-    /** 필드와 값을 차례로. listpack 이면 넣은 순서, hashtable 이면 버킷 순서다. */
+    /** 순회 순서 - listpack은 삽입 순, hashtable은 버킷 순 */
     public void forEach(BiConsumer<byte[], byte[]> visitor) {
         if (dict != null) {
             dict.forEach((field, value) -> visitor.accept(field.bytes(), value));
@@ -125,12 +117,12 @@ public final class HashValue implements Value {
         }
     }
 
-    /** 대시보드용. listpack 일 때만 있다. */
+    /** hashtable이면 null */
     public Listpack listpack() {
         return listpack;
     }
 
-    /** 대시보드용. hashtable 일 때만 있다. */
+    /** listpack이면 null */
     public Dict<byte[]> dict() {
         return dict;
     }

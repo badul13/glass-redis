@@ -12,10 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code HGET key field} / {@code HMGET key field [field ...]} — 필드의 값. 없는 필드는 nil.
- *
- * <p>{@code HMGET} 은 {@code MGET} 처럼 응답 순서가 인자 순서와 같다. 키가 없어도 에러가 아니라
- * 필드 수만큼 nil 이 든 배열이다. 다만 {@code MGET} 과 달리 키가 Hash 가 아니면 WRONGTYPE 이다.
+ * HGET key field, HMGET key field [field ...] - 없는 필드는 nil
+ * HMGET - MGET과 달리 Hash 아닌 키에 WRONGTYPE
  */
 public final class HgetCommand implements Command {
 

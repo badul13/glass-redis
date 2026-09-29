@@ -1,12 +1,11 @@
-// 서버가 SSE 로 보내는 JSON 의 모양.
-// 원본은 Java 쪽 DashboardJson 이고, 그 모양은 DashboardJsonTest 가 못박아 두고 있다.
+// 서버 DashboardJson 출력 모양 - DashboardJsonTest로 고정
 
 export type RemovalReason = 'LAZY_EXPIRED' | 'ACTIVE_EXPIRED' | 'DELETED'
 
 interface Stamped {
-  /** 발행 순번. 건너뛴 자리가 있으면 그 사이는 버려진 것이다. */
+  /** 건너뛴 번호는 버려진 이벤트 */
   seq: number
-  /** 벌어진 시각(에포크 ms). */
+  /** 에포크 ms */
   at: number
 }
 
@@ -26,7 +25,7 @@ export interface CommandExecuted extends Stamped {
   connection: number
   name: string
   args: string
-  /** 실행 스레드가 이 명령을 붙잡고 있던 시간(ns). 소켓 입출력은 빠져 있다. */
+  /** 실행 스레드 소요 ns - 소켓 입출력 제외 */
   nanos: number
   reply: string
 }
@@ -35,22 +34,21 @@ export interface KeyRemoved extends Stamped {
   type: 'keyRemoved'
   key: string
   reason: RemovalReason
-  /** 만료 시각이 지나고 실제로 지워지기까지 걸린 시간(ms). DELETED 면 0. */
+  /** 만료 시각부터 실제 삭제까지 ms - DELETED면 0 */
   lateBy: number
 }
 
 export interface ExpiryCycleCompleted extends Stamped {
   type: 'expiryCycle'
-  /** SLOW: 서버 주기 작업(100ms 마다, 최대 25ms). FAST: 실행 큐가 비어 쉬기 직전(최대 1ms). */
+  /** SLOW - 100ms 주기, 최대 25ms / FAST - 큐가 비어 쉬기 직전, 최대 1ms */
   kind: 'SLOW' | 'FAST'
-  /** 10% 규칙에 걸려 되풀이한 바퀴 수. */
+  /** 10% 규칙 반복 바퀴 수 */
   rounds: number
   sampled: number
   expired: number
   nanos: number
-  /** 시간 한도에 걸려 일을 남기고 끝났는지. */
   timeLimitHit: boolean
-  /** 만료됐는데 아직 남아 있는 키의 비율 추정치(%). */
+  /** 만료됐지만 남아 있는 키의 비율 추정치(%) */
   stalePercent: number
 }
 
@@ -62,22 +60,21 @@ export type ActivityEvent =
   | ExpiryCycleCompleted
 
 export interface ActivityBatch {
-  /** 이 화면이 못 따라가서 서버가 버린 개수. */
+  /** 화면이 못 따라가 서버가 버린 개수 */
   dropped: number
   events: ActivityEvent[]
 }
 
-/** TYPE 명령이 돌려주는 자료형 이름. */
 export type ValueType = 'string' | 'list' | 'hash' | 'set' | 'zset'
 
 export interface KeyView {
   key: string
   type: ValueType
-  /** OBJECT ENCODING 이 돌려주는 모양. 같은 자료형도 크기에 따라 바뀐다. */
+  /** OBJECT ENCODING 값 */
   encoding: string
-  /** 문자열은 바이트 수, 모음은 원소 수. */
+  /** 문자열은 바이트 수, 모음은 원소 수 */
   size: number
-  /** 만료까지 남은 ms. 만료 시각이 없으면 null, 이미 지났는데 아직 안 지워졌으면 음수. */
+  /** 남은 ms - 만료 시각 없으면 null, 만료됐지만 아직 안 지워졌으면 음수 */
   ttl: number | null
 }
 
@@ -87,13 +84,13 @@ export interface KeyspaceSnapshot {
   keys: KeyView[]
 }
 
-/** JSON 에 무한대가 없어서 서버가 문자열로 보낸다. */
+/** JSON에 무한대 없음 - 문자열로 수신 */
 export type Score = number | 'inf' | '-inf'
 
 export interface SortedSetMember {
   member: string
   score: Score
-  /** skiplist 일 때 층별로 건너뛰는 노드 수. 그 층에서 끝이면 -1. 길이가 곧 이 노드의 층수. listpack 이면 빈 배열. */
+  /** 층별 span - 그 층 마지막이면 -1, 길이 = 층수, listpack이면 빈 배열 */
   spans: number[]
 }
 
@@ -101,12 +98,12 @@ export interface SortedSetSnapshot {
   key: string
   status: 'ok' | 'missing' | 'wrongType'
   encoding: 'listpack' | 'skiplist' | ''
-  /** 전체 멤버 수. nodes 가 잘렸어도 전체를 센 것. */
+  /** 전체 멤버 수 - nodes가 잘려도 전체 기준 */
   length: number
-  /** listpack 이면 바이트 배열 전체 크기. skiplist 면 0. */
+  /** listpack 바이트 크기 - skiplist면 0 */
   bytes: number
   level: number
-  /** 머리 노드의 층별 span. */
+  /** 머리 노드의 층별 span */
   header: number[]
   nodes: SortedSetMember[]
 }
