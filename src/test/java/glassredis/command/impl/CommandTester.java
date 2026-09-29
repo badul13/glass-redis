@@ -36,6 +36,15 @@ final class CommandTester {
         return RespValue.BulkString.of(text);
     }
 
+    /** 벌크 문자열의 배열. */
+    static RespValue array(String... texts) {
+        List<RespValue> items = new ArrayList<>();
+        for (String text : texts) {
+            items.add(bulk(text));
+        }
+        return new RespValue.Array(items);
+    }
+
     static RespValue integer(long value) {
         return new RespValue.Int(value);
     }

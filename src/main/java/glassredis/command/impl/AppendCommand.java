@@ -7,6 +7,7 @@ import glassredis.resp.RespReader;
 import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
+import glassredis.store.StringValue;
 
 import java.util.Arrays;
 import java.util.List;
@@ -41,7 +42,10 @@ public final class AppendCommand implements Command {
             return new RespValue.Int(suffix.length);
         }
 
-        byte[] current = entry.value();
+        if (!(entry.value() instanceof StringValue string)) {
+            return Errors.wrongType();
+        }
+        byte[] current = string.bytes();
         long joinedLength = (long) current.length + suffix.length;
         // 한 번에 받을 수 있는 벌크 문자열 크기를 넘는 값은 만들지 않는다. 조금씩 붙여서 한도를 우회하는 걸 막는다.
         if (joinedLength > RespReader.MAX_BULK_LENGTH) {

@@ -128,7 +128,8 @@ class ExpiryCycleTest {
     private Keyspace observedKeyspace(EventHub hub, int expiredKeys) {
         Keyspace observed = new Keyspace(clock, hub);
         for (int i = 0; i < expiredKeys; i++) {
-            observed.put(Key.of("expired:" + i), new Entry("v".getBytes(StandardCharsets.UTF_8), clock.millis() + 10));
+            observed.put(Key.of("expired:" + i),
+                    Entry.of("v".getBytes(StandardCharsets.UTF_8)).withExpireAt(clock.millis() + 10));
         }
         clock.advanceMillis(11);
         return observed;
@@ -140,7 +141,8 @@ class ExpiryCycleTest {
 
     private void putKeys(String prefix, int count, long expireAtMillis) {
         for (int i = 0; i < count; i++) {
-            keyspace.put(Key.of(prefix + ":" + i), new Entry("v".getBytes(StandardCharsets.UTF_8), expireAtMillis));
+            keyspace.put(Key.of(prefix + ":" + i),
+                    Entry.of("v".getBytes(StandardCharsets.UTF_8)).withExpireAt(expireAtMillis));
         }
     }
 }

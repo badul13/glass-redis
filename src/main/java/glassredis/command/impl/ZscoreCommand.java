@@ -3,38 +3,40 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
-import glassredis.store.StringValue;
+import glassredis.store.SortedSetValue;
 
 import java.util.List;
 
 /**
- * {@code GET key} — 값을 돌려준다. 키가 없으면 nil.
+ * {@code ZSCORE key member} — 멤버의 점수. 없으면 nil.
  *
- * <p>"키가 없음"(nil, {@code $-1}) 과 "값이 빈 문자열"({@code $0}) 은 다른 응답이다.
- * {@code SET k ""} 을 한 뒤의 {@code GET k} 는 nil 이 아니라 빈 문자열을 줘야 한다.
+ * <p>점수는 정수가 아니라 문자열(벌크 문자열)로 나간다. RESP2 에는 실수 타입이 없다.
+ * 모양은 {@link Numbers#formatDouble} 을 따른다.
  */
-public final class GetCommand implements Command {
+public final class ZscoreCommand implements Command {
 
     @Override
     public String name() {
-        return "GET";
+        return "ZSCORE";
     }
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
+        if (args.size() != 2) {
             return Errors.wrongNumberOfArguments(name());
         }
         Entry entry = ctx.keyspace().get(new Key(args.get(0)));
         if (entry == null) {
             return RespValue.NIL;
         }
-        if (!(entry.value() instanceof StringValue string)) {
+        if (!(entry.value() instanceof SortedSetValue zset)) {
             return Errors.wrongType();
         }
-        return new RespValue.BulkString(string.bytes());
+        Double score = zset.score(new Key(args.get(1)));
+        return score == null ? RespValue.NIL : new RespValue.BulkString(Numbers.formatDouble(score));
     }
 }

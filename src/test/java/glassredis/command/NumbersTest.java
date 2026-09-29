@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.OptionalDouble;
 import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,6 +32,54 @@ class NumbersTest {
         for (String text : rejected) {
             assertTrue(parse(text).isEmpty(), "정수로 받아들이면 안 된다: \"" + text + "\"");
         }
+    }
+
+    @Test
+    @DisplayName("점수는 strtod 처럼 읽는다 — inf 표기를 받고, 공백·자바 접미사·NaN·범위 초과는 거절한다")
+    void parsesScores() {
+        assertEquals(OptionalDouble.of(1.5), parseScore("1.5"));
+        assertEquals(OptionalDouble.of(-3), parseScore("-3"));
+        assertEquals(OptionalDouble.of(1000), parseScore("1e3"));
+        assertEquals(OptionalDouble.of(0.5), parseScore(".5"));
+        assertEquals(OptionalDouble.of(16), parseScore("0x10"));
+        assertEquals(OptionalDouble.of(31), parseScore("0x1f"));
+        assertEquals(OptionalDouble.of(Double.POSITIVE_INFINITY), parseScore("+inf"));
+        assertEquals(OptionalDouble.of(Double.POSITIVE_INFINITY), parseScore("Infinity"));
+        assertEquals(OptionalDouble.of(Double.NEGATIVE_INFINITY), parseScore("-INF"));
+
+        String[] rejected = {"", " 1", "1 ", "1.5d", "2f", "nan", "NaN", "abc", "1e400"};
+        for (String text : rejected) {
+            assertTrue(parseScore(text).isEmpty(), "점수로 받아들이면 안 된다: \"" + text + "\"");
+        }
+    }
+
+    @Test
+    @DisplayName("점수는 실제 Redis 7.4 와 같은 모양으로 쓴다")
+    void formatsScores() {
+        // 기대값은 전부 실제 Redis 7.4 에 같은 값을 ZADD 하고 ZSCORE 로 받아 본 것이다.
+        String[][] cases = {
+                {"3", "3"}, {"-3", "-3"}, {"-0.0", "0"}, {"0.1", "0.1"}, {"123456.789", "123456.789"},
+                {"0.00001", "0.00001"}, {"0.000001", "0.000001"}, {"-0.000001", "-0.000001"},
+                {"1e-7", "1e-7"}, {"1.5e-7", "1.5e-7"}, {"123e-9", "1.23e-7"}, {"1.25e-10", "1.25e-10"},
+                {"0.1234567890123", "0.1234567890123"}, {"1.2345678901234567e-5", "1.2345678901234568e-5"},
+                {"1e17", "100000000000000000"}, {"1e18", "1000000000000000000"}, {"1.5e18", "1500000000000000000"},
+                {"4.6e18", "4600000000000000000"}, {"4.7e18", "4.7e+18"}, {"1e19", "1e+19"}, {"1.25e19", "1.25e+19"}, {"123e17", "1.23e+19"}, {"-1e22", "-1e+22"},
+                {"12345678901234567890", "12345678901234567000"}, {"9007199254740993", "9007199254740992"},
+                {"1.7976931348623157e308", "1.7976931348623157e+308"}, {"5e-324", "5e-324"},
+        };
+        for (String[] c : cases) {
+            assertEquals(c[1], format(Double.parseDouble(c[0])), "입력 " + c[0]);
+        }
+        assertEquals("inf", format(Double.POSITIVE_INFINITY));
+        assertEquals("-inf", format(Double.NEGATIVE_INFINITY));
+    }
+
+    private static OptionalDouble parseScore(String text) {
+        return Numbers.parseDouble(text.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private static String format(double value) {
+        return new String(Numbers.formatDouble(value), StandardCharsets.US_ASCII);
     }
 
     private static OptionalLong parse(String text) {

@@ -8,6 +8,7 @@ import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
+import glassredis.store.StringValue;
 
 import java.util.List;
 import java.util.OptionalLong;
@@ -84,7 +85,10 @@ public final class IncrementCommand implements Command {
 
         long current = 0;
         if (entry != null) {
-            OptionalLong parsed = Numbers.parseLong(entry.value());
+            if (!(entry.value() instanceof StringValue string)) {
+                return Errors.wrongType();
+            }
+            OptionalLong parsed = Numbers.parseLong(string.bytes());
             if (parsed.isEmpty()) {
                 return Errors.notAnInteger();
             }

@@ -60,9 +60,14 @@ export interface ActivityBatch {
   events: ActivityEvent[]
 }
 
+/** TYPE 명령이 돌려주는 자료형 이름. */
+export type ValueType = 'string' | 'list' | 'hash' | 'set' | 'zset'
+
 export interface KeyView {
   key: string
-  bytes: number
+  type: ValueType
+  /** 문자열은 바이트 수, 모음은 원소 수. */
+  size: number
   /** 만료까지 남은 ms. 만료 시각이 없으면 null, 이미 지났는데 아직 안 지워졌으면 음수. */
   ttl: number | null
 }

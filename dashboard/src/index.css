@@ -311,8 +311,35 @@ table.keys td {
   white-space: nowrap;
 }
 
-table.keys td.key {
+table.keys td.type {
   padding-left: 14px;
+  padding-right: 0;
+  font-size: 11px;
+}
+
+/* 자료형마다 색을 달리해 목록에서 한눈에 갈리게 한다. 문자열은 가장 흔하므로 제일 흐리게. */
+table.keys .type-string {
+  color: var(--faint);
+}
+
+table.keys .type-list {
+  color: var(--lazy);
+}
+
+table.keys .type-hash {
+  color: var(--ok);
+}
+
+table.keys .type-set {
+  color: var(--deleted);
+}
+
+table.keys .type-zset {
+  color: var(--active);
+}
+
+table.keys td.key {
+  padding-left: 8px;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;

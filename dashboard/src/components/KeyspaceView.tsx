@@ -31,8 +31,9 @@ export function KeyspaceView({ snapshot }: { snapshot: KeyspaceSnapshot | null }
               const stale = key.ttl !== null && key.ttl <= 0
               return (
                 <tr key={key.key} className={stale ? 'stale' : undefined}>
+                  <td className="type"><span className={'type-' + key.type}>{key.type}</span></td>
                   <td className="key">{key.key}</td>
-                  <td className="size">{bytes(key.bytes)}</td>
+                  <td className="size">{key.type === 'string' ? bytes(key.size) : key.size + '개'}</td>
                   <td className="ttl">
                     {key.ttl === null ? (
                       <span className="forever">만료 없음</span>

@@ -92,7 +92,8 @@ class CommandLoopTest {
         ManualClock clock = new ManualClock(1_000_000);
         Keyspace keyspace = new Keyspace(clock);
         for (int i = 0; i < 100; i++) {
-            keyspace.put(Key.of("k" + i), new Entry("v".getBytes(StandardCharsets.UTF_8), clock.millis() + 10));
+            keyspace.put(Key.of("k" + i),
+                    Entry.of("v".getBytes(StandardCharsets.UTF_8)).withExpireAt(clock.millis() + 10));
         }
         clock.advanceMillis(11);
         // 실행 스레드가 시작하기 전이라 여기서 키스페이스를 직접 채워도 된다.

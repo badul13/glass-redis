@@ -38,7 +38,7 @@ class KeyspaceTest {
 
         keyspace.put(new Key(written), Entry.of(bytes("bar")));
 
-        assertArrayEquals(bytes("bar"), keyspace.get(new Key(lookedUp)).value());
+        assertArrayEquals(bytes("bar"), ((StringValue) keyspace.get(new Key(lookedUp)).value()).bytes());
     }
 
     @Test
@@ -60,7 +60,7 @@ class KeyspaceTest {
     @Test
     @DisplayName("만료 시각과 같은 ms 에는 살아 있고, 1ms 뒤에 읽으면 없는 키가 되며 그 자리에서 지워진다")
     void lazyExpiry() {
-        keyspace.put(Key.of("k"), new Entry(bytes("v"), clock.millis() + 100));
+        keyspace.put(Key.of("k"), Entry.of(bytes("v")).withExpireAt(clock.millis() + 100));
 
         clock.advanceMillis(100);
         assertNotNull(keyspace.get(Key.of("k")));
@@ -75,7 +75,7 @@ class KeyspaceTest {
     @Test
     @DisplayName("이미 만료된 키는 remove 해도 지운 것으로 세지 않는다")
     void removeExpiredKey() {
-        keyspace.put(Key.of("k"), new Entry(bytes("v"), clock.millis() + 10));
+        keyspace.put(Key.of("k"), Entry.of(bytes("v")).withExpireAt(clock.millis() + 10));
         clock.advanceMillis(11);
 
         assertFalse(keyspace.remove(Key.of("k")));
@@ -84,7 +84,7 @@ class KeyspaceTest {
     @Test
     @DisplayName("만료 시각이 없는 값으로 덮어쓰면 샘플링 대상에서 빠진다")
     void overwriteWithoutExpiryLeavesSamplingSet() {
-        keyspace.put(Key.of("k"), new Entry(bytes("v"), clock.millis() + 100));
+        keyspace.put(Key.of("k"), Entry.of(bytes("v")).withExpireAt(clock.millis() + 100));
         assertEquals(1, keyspace.expiringKeyCount());
 
         keyspace.put(Key.of("k"), Entry.of(bytes("v2")));
@@ -94,7 +94,7 @@ class KeyspaceTest {
     @Test
     @DisplayName("읽다가 만료를 발견해 지우면, 만료 시각보다 얼마나 늦었는지까지 알린다")
     void publishesLazyExpiry() {
-        observed.put(Key.of("k"), new Entry(bytes("v"), clock.millis() + 100));
+        observed.put(Key.of("k"), Entry.of(bytes("v")).withExpireAt(clock.millis() + 100));
 
         // 100ms 짜리 키를 130ms 뒤에 읽는다. 아무도 읽지 않는 동안에는 지워지지 않고 있었다.
         clock.advanceMillis(130);

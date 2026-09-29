@@ -6,20 +6,16 @@ import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
-import glassredis.store.StringValue;
+import glassredis.store.ListValue;
 
 import java.util.List;
 
-/**
- * {@code STRLEN key} — 값의 길이. 키가 없으면 0.
- *
- * <p>문자 수가 아니라 바이트 수다. {@code "한글"} 은 UTF-8 로 6 바이트라 6 이다.
- */
-public final class StrlenCommand implements Command {
+/** {@code LLEN key} — List 의 길이. 키가 없으면 0. */
+public final class LlenCommand implements Command {
 
     @Override
     public String name() {
-        return "STRLEN";
+        return "LLEN";
     }
 
     @Override
@@ -31,9 +27,9 @@ public final class StrlenCommand implements Command {
         if (entry == null) {
             return new RespValue.Int(0);
         }
-        if (!(entry.value() instanceof StringValue string)) {
+        if (!(entry.value() instanceof ListValue list)) {
             return Errors.wrongType();
         }
-        return new RespValue.Int(string.bytes().length);
+        return new RespValue.Int(list.size());
     }
 }

@@ -59,6 +59,15 @@ class StringCommandsTest {
     }
 
     @Test
+    @DisplayName("TYPE 은 문자열에 string, 없는 키에 none 을 준다")
+    void type() {
+        run("SET", "k", "v");
+
+        assertEquals(new RespValue.SimpleString("string"), run("TYPE", "k"));
+        assertEquals(new RespValue.SimpleString("none"), run("TYPE", "missing"));
+    }
+
+    @Test
     @DisplayName("인자 개수가 틀리면 에러를 준다")
     void wrongArity() {
         assertEquals(error("ERR wrong number of arguments for 'get' command"), run("GET"));

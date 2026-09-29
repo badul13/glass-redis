@@ -57,13 +57,60 @@ public final class Errors {
         return new RespValue.Err("ERR syntax error");
     }
 
+    /**
+     * 키에 든 값의 자료형이 명령과 맞지 않는다. List 에 {@code GET} 을 했을 때 같은 경우다.
+     * 접두어가 {@code ERR} 이 아니라 {@code WRONGTYPE} 인 몇 안 되는 에러다.
+     */
+    public static RespValue.Err wrongType() {
+        return new RespValue.Err("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
     public static RespValue.Err notAnInteger() {
         return new RespValue.Err("ERR value is not an integer or out of range");
+    }
+
+    /** {@code LPOP k -1} 처럼 개수 자리에 음수(또는 정수가 아닌 값)를 줬다. */
+    public static RespValue.Err mustBePositive() {
+        return new RespValue.Err("ERR value is out of range, must be positive");
     }
 
     public static RespValue.Err invalidExpireTime(String commandName) {
         return new RespValue.Err(
                 "ERR invalid expire time in '" + commandName.toLowerCase(Locale.ROOT) + "' command");
+    }
+
+    public static RespValue.Err notAFloat() {
+        return new RespValue.Err("ERR value is not a valid float");
+    }
+
+    public static RespValue.Err minOrMaxNotAFloat() {
+        return new RespValue.Err("ERR min or max is not a float");
+    }
+
+    /** {@code inf} 에 {@code -inf} 를 더한 것처럼 점수 계산 결과가 NaN 이 됐다. */
+    public static RespValue.Err scoreIsNaN() {
+        return new RespValue.Err("ERR resulting score is not a number (NaN)");
+    }
+
+    public static RespValue.Err zaddNxXxNotCompatible() {
+        return new RespValue.Err("ERR XX and NX options at the same time are not compatible");
+    }
+
+    public static RespValue.Err zaddGtLtNxNotCompatible() {
+        return new RespValue.Err("ERR GT, LT, and/or NX options at the same time are not compatible");
+    }
+
+    public static RespValue.Err zaddIncrSinglePair() {
+        return new RespValue.Err("ERR INCR option supports a single increment-element pair");
+    }
+
+    public static RespValue.Err limitNeedsByScore() {
+        return new RespValue.Err(
+                "ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX");
+    }
+
+    public static RespValue.Err hashValueNotAnInteger() {
+        return new RespValue.Err("ERR hash value is not an integer");
     }
 
     public static RespValue.Err incrementOverflow() {

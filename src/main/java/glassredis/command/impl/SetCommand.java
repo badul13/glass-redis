@@ -8,6 +8,7 @@ import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
+import glassredis.store.StringValue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -133,7 +134,14 @@ public final class SetCommand implements Command {
 
         Key key = new Key(args.get(0));
         Entry previous = keyspace.get(key);
-        RespValue previousValue = previous == null ? RespValue.NIL : new RespValue.BulkString(previous.value());
+        RespValue previousValue = RespValue.NIL;
+        if (previous != null && get) {
+            // GET 없는 SET 은 자료형을 가리지 않고 덮어쓴다. 기존 값을 돌려줘야 할 때만 그게 문자열이어야 한다.
+            if (!(previous.value() instanceof StringValue string)) {
+                return Errors.wrongType();
+            }
+            previousValue = new RespValue.BulkString(string.bytes());
+        }
 
         if ((nx && previous != null) || (xx && previous == null)) {
             // 조건이 안 맞아 쓰지 않는다. GET 을 줬으면 그래도 기존 값은 돌려준다.
@@ -144,7 +152,7 @@ public final class SetCommand implements Command {
             expireAt = previous.expireAtMillis();
         }
         // EXAT/PXAT 로 이미 지난 시각을 줬다면 여기서 저장은 되지만, 다음에 읽는 순간 만료로 확인돼 없는 키로 보인다.
-        keyspace.put(key, new Entry(args.get(1), expireAt));
+        keyspace.put(key, new Entry(new StringValue(args.get(1)), expireAt));
         return get ? previousValue : RespValue.OK;
     }
 }

@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class DashboardServerTest {
 
     private static final KeyspaceSnapshot SNAPSHOT = new KeyspaceSnapshot(1, 1,
-            List.of(new KeyspaceSnapshot.KeyView("k", 3, 500L)));
+            List.of(new KeyspaceSnapshot.KeyView("k", "string", 3, 500L)));
 
     private final EventHub hub = new EventHub();
     private DashboardServer dashboard;
@@ -61,7 +61,7 @@ class DashboardServerTest {
 
         Iterator<String> lines = response.body().iterator();
         assertEquals("event: keyspace", nextEventLine(lines));
-        assertEquals("data: {\"total\":1,\"expiring\":1,\"keys\":[{\"key\":\"k\",\"bytes\":3,\"ttl\":500}]}",
+        assertEquals("data: {\"total\":1,\"expiring\":1,\"keys\":[{\"key\":\"k\",\"type\":\"string\",\"size\":3,\"ttl\":500}]}",
                 lines.next());
 
         awaitScreenCount(1);

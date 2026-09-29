@@ -34,11 +34,13 @@ public record KeyspaceSnapshot(int totalKeys, int expiringKeys, List<KeyView> ke
     /**
      * 키 하나.
      *
-     * @param valueBytes 값의 바이트 수. 값 자체는 담지 않는다 — 목록에 필요한 건 크기지 내용이 아니다.
+     * @param type       자료형 이름. {@code TYPE} 명령의 응답과 같다.
+     * @param size       값의 크기. 문자열은 바이트 수, 모음은 원소 수다.
+     *                   값 자체는 담지 않는다 — 목록에 필요한 건 크기지 내용이 아니다.
      * @param ttlMillis  만료까지 남은 시간(ms). 만료 시각이 없으면 {@code null} 이고,
      *                   <b>이미 지났는데 아직 지워지지 않았으면 음수</b>다. 그 음수가 화면에서 제일 중요한 값이다.
      */
-    public record KeyView(String key, int valueBytes, Long ttlMillis) {
+    public record KeyView(String key, String type, int size, Long ttlMillis) {
     }
 
     public KeyspaceSnapshot {
@@ -51,7 +53,8 @@ public record KeyspaceSnapshot(int totalKeys, int expiringKeys, List<KeyView> ke
         List<KeyView> keys = new ArrayList<>();
         keyspace.forEach((key, entry) -> {
             if (keys.size() < maxKeys) {
-                keys.add(new KeyView(Display.text(key.bytes()), entry.value().length, ttl(entry, now)));
+                keys.add(new KeyView(Display.text(key.bytes()), entry.value().typeName(), entry.value().size(),
+                        ttl(entry, now)));
             }
         });
         keys.sort(Comparator.comparing(KeyView::key));

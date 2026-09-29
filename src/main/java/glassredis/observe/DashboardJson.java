@@ -47,7 +47,8 @@ final class DashboardJson {
             }
             out.append('{');
             Json.field(out, "key", key.key());
-            Json.field(out, "bytes", key.valueBytes());
+            Json.field(out, "type", key.type());
+            Json.field(out, "size", key.size());
             Json.field(out, "ttl", key.ttlMillis());
             out.append('}');
         }
