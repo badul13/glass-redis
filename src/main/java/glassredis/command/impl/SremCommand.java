@@ -38,6 +38,7 @@ public final class SremCommand implements Command {
                 removed++;
             }
         }
+        ctx.dirty(removed);
         if (set.size() == 0) {
             ctx.keyspace().remove(key);
         }

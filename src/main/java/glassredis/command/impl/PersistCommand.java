@@ -28,6 +28,7 @@ public final class PersistCommand implements Command {
             return new RespValue.Int(0);
         }
         ctx.keyspace().put(key, entry.withExpireAt(Entry.NO_EXPIRY));
+        ctx.dirty();
         return new RespValue.Int(1);
     }
 }

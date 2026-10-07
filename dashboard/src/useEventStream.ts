@@ -2,6 +2,10 @@ import { useEffect, useReducer } from 'react'
 import type {
   ActivityBatch,
   ActivityEvent,
+  AofEvent,
+  AofRewriteFinished,
+  AofRewriteStarted,
+  AofSnapshot,
   ExpiryCycleCompleted,
   KeyRemoved,
   KeyspaceSnapshot,
@@ -15,6 +19,9 @@ const MAX_ROWS = 400
 const MAX_CYCLES = 60
 
 const MAX_REMOVALS = 40
+
+/** AOF 꼬리 - 쓰기 묶음·fsync·재작성 표시 */
+const MAX_AOF_EVENTS = 120
 
 export type Status = 'connecting' | 'live' | 'offline'
 
@@ -30,6 +37,11 @@ export interface Dashboard {
   removalCounts: Record<RemovalReason, number>
   commandCount: number
   droppedTotal: number
+  aof: AofSnapshot | null
+  aofEvents: AofEvent[]
+  /** 진행 중이거나 마지막 재작성 */
+  rewriteStarted: AofRewriteStarted | null
+  rewriteFinished: AofRewriteFinished | null
 }
 
 const EMPTY: Dashboard = {
@@ -41,12 +53,17 @@ const EMPTY: Dashboard = {
   removalCounts: { LAZY_EXPIRED: 0, ACTIVE_EXPIRED: 0, DELETED: 0 },
   commandCount: 0,
   droppedTotal: 0,
+  aof: null,
+  aofEvents: [],
+  rewriteStarted: null,
+  rewriteFinished: null,
 }
 
 type Action =
   | { type: 'status'; status: Status }
   | { type: 'activity'; batch: ActivityBatch }
   | { type: 'keyspace'; snapshot: KeyspaceSnapshot }
+  | { type: 'aof'; snapshot: AofSnapshot }
 
 function tail<T>(items: T[], limit: number): T[] {
   return items.length <= limit ? items : items.slice(items.length - limit)
@@ -60,6 +77,9 @@ function reduce(state: Dashboard, action: Action): Dashboard {
     case 'keyspace':
       return { ...state, keyspace: action.snapshot }
 
+    case 'aof':
+      return { ...state, aof: action.snapshot }
+
     case 'activity': {
       const { dropped, events } = action.batch
 
@@ -72,11 +92,24 @@ function reduce(state: Dashboard, action: Action): Dashboard {
       const removals = [...state.removals]
       const counts = { ...state.removalCounts }
       let commandCount = state.commandCount
+      const aofEvents = [...state.aofEvents]
+      let { rewriteStarted, rewriteFinished } = state
 
       for (const event of events) {
         if (event.type === 'expiryCycle') {
           // 초당 최대 10회 수신 - 스트림에 섞으면 다른 줄을 밀어내므로 패널에만 표시
           cycles.push(event)
+          continue
+        }
+        if (event.type.startsWith('aof')) {
+          // 명령마다 생겨 스트림을 밀어내므로 AOF 패널에만
+          aofEvents.push(event as AofEvent)
+          if (event.type === 'aofRewriteStarted') {
+            rewriteStarted = event
+            rewriteFinished = null
+          } else if (event.type === 'aofRewriteFinished') {
+            rewriteFinished = event
+          }
           continue
         }
         rows.push({ kind: 'event', event })
@@ -96,6 +129,9 @@ function reduce(state: Dashboard, action: Action): Dashboard {
         removalCounts: counts,
         commandCount,
         droppedTotal: state.droppedTotal + dropped,
+        aofEvents: tail(aofEvents, MAX_AOF_EVENTS),
+        rewriteStarted,
+        rewriteFinished,
       }
     }
   }
@@ -117,6 +153,9 @@ export function useEventStream(): Dashboard {
     })
     source.addEventListener('keyspace', (event) => {
       dispatch({ type: 'keyspace', snapshot: JSON.parse(event.data) as KeyspaceSnapshot })
+    })
+    source.addEventListener('aof', (event) => {
+      dispatch({ type: 'aof', snapshot: JSON.parse(event.data) as AofSnapshot })
     })
 
     return () => source.close()

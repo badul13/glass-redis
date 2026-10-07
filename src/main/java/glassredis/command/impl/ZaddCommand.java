@@ -134,6 +134,7 @@ public final class ZaddCommand implements Command {
             incrResult = score;
         }
 
+        ctx.dirty(added + changed);
         // 빈 Sorted Set이면 키 미등록
         if (entry == null && zset.size() > 0) {
             keyspace.put(key, Entry.of(zset));

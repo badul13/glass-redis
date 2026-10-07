@@ -46,6 +46,7 @@ public final class SaddCommand implements Command {
                 added++;
             }
         }
+        ctx.dirty(added);
         return new RespValue.Int(added);
     }
 }

@@ -3,12 +3,18 @@ package glassredis.server;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Propagation;
+import glassredis.observe.AofSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
+import glassredis.persistence.AppendOnlyLog;
 import glassredis.resp.RespValue;
 import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -26,7 +32,7 @@ import java.util.function.Function;
  *
  * <pre>
  *   커넥션 스레드들 ─┐
- *   주기 타이머  ────┴─▶ 큐 ─▶ 실행 스레드
+ *   주기 타이머  ────┴─▶ 큐 ─▶ 실행 스레드 ─▶ 큐가 비면 beforeSleep: AOF write 후 응답 전달
  * </pre>
  *
  * <p>실행 스레드는 플랫폼 스레드 - 계산만 하므로 가상 스레드 불필요
@@ -55,15 +61,39 @@ final class CommandLoop implements AutoCloseable {
 
     private final EventBus events;
 
+    private final AppendOnlyLog aof;
+
+    /** 실행했지만 아직 안 보낸 응답 - AOF write 뒤 전달 (beforeSleep의 handleClientsWithPendingWrites) */
+    private final List<Runnable> pendingReplies = new ArrayList<>();
+
     /** 실행 스레드 사망 시 호출 - 서버 종료로 연결 */
     private final Runnable onFatalError;
 
     private volatile boolean running;
 
-    /** @param keyspace start() 이후 실행 스레드 전용 */
     CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
-        this.context = new Context(keyspace);
+        this(keyspace, events, new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events),
+                onFatalError);
+    }
+
+    /**
+     * @param keyspace start() 이후 실행 스레드 전용
+     * @param aof      복구까지 마친 상태 - 이후 실행 스레드 전용
+     */
+    CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Runnable onFatalError) {
+        this.aof = aof;
+        this.context = new Context(keyspace, new Propagation(),
+                () -> aof.rewriteInBackground(keyspace, "BGREWRITEAOF"));
         this.events = events;
+        // 만료 삭제는 DEL로 전파 - 명령 중이면 그 명령과 묶고, 주기적 만료면 단독
+        keyspace.setExpiredListener(key -> {
+            List<byte[]> del = List.of("DEL".getBytes(StandardCharsets.US_ASCII), key.bytes());
+            if (context.propagation().active()) {
+                context.propagation().also(del);
+            } else {
+                aof.feedAll(List.of(del));
+            }
+        });
         this.activeExpire = new ActiveExpireCycle(keyspace, events);
         this.onFatalError = onFatalError;
     }
@@ -75,10 +105,16 @@ final class CommandLoop implements AutoCloseable {
         cronTimer.scheduleAtFixedRate(this::requestCron, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
     }
 
-    /** @param connectionId 이벤트 표시용 - 실행과 무관 */
-    CompletableFuture<RespValue> submit(Command command, List<byte[]> args, long connectionId) {
+    /**
+     * @param argv         이름 포함 전체 인자 - AOF에는 받은 그대로 기록
+     * @param connectionId 이벤트 표시용 - 실행과 무관
+     */
+    CompletableFuture<RespValue> submit(Command command, List<byte[]> argv, long connectionId) {
         CompletableFuture<RespValue> reply = new CompletableFuture<>();
-        queue.add(() -> reply.complete(execute(command, args, connectionId)));
+        queue.add(() -> {
+            RespValue result = execute(command, argv, connectionId);
+            pendingReplies.add(() -> reply.complete(result));
+        });
         return reply;
     }
 
@@ -94,15 +130,31 @@ final class CommandLoop implements AutoCloseable {
         return result;
     }
 
+    /** 대시보드용 AOF 상태 - 실행 스레드에서 */
+    CompletableFuture<AofSnapshot> aofSnapshot() {
+        CompletableFuture<AofSnapshot> result = new CompletableFuture<>();
+        queue.add(() -> result.complete(aof.snapshot()));
+        return result;
+    }
+
     /**
      * 큐에 남은 future는 미완료로 방치
      * 대기 중 커넥션 스레드는 RedisServer.close()의 인터럽트로 해제
+     * 실행 스레드가 멈춘 뒤 AOF 마무리 - 남은 버퍼 write와 fsync
      */
     @Override
     public void close() {
         running = false;
         cronTimer.shutdownNow();
         thread.interrupt();
+        if (thread != Thread.currentThread()) {
+            try {
+                thread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        aof.close();
     }
 
     /** 타이머 스레드에서 호출 */
@@ -124,14 +176,28 @@ final class CommandLoop implements AutoCloseable {
         activeExpire.run(ActiveExpireCycle.Kind.SLOW);
         keyspace.tryResizeHashTables();
         keyspace.incrementallyRehash();
+        aof.cron(keyspace);
+    }
+
+    /**
+     * 큐가 비어 쉬기 직전 - Redis beforeSleep 순서
+     * FAST 만료(DEL 전파 생길 수 있음) → AOF write → 응답 전달
+     */
+    private void beforeSleep() {
+        activeExpire.run(ActiveExpireCycle.Kind.FAST);
+        aof.flush();
+        if (!pendingReplies.isEmpty()) {
+            pendingReplies.forEach(Runnable::run);
+            pendingReplies.clear();
+        }
     }
 
     private void runLoop() {
         while (running) {
             try {
-                // 큐가 비면 곧 대기 - FAST 만료 실행(beforeSleep)
+                // 큐가 비면 곧 대기 - beforeSleep
                 if (queue.isEmpty()) {
-                    activeExpire.run(ActiveExpireCycle.Kind.FAST);
+                    beforeSleep();
                 }
                 queue.take().run();
             } catch (InterruptedException e) {
@@ -147,11 +213,14 @@ final class CommandLoop implements AutoCloseable {
         }
     }
 
-    private RespValue execute(Command command, List<byte[]> args, long connectionId) {
+    /** call() - 실행 후 dirty면 AOF로 전파 */
+    private RespValue execute(Command command, List<byte[]> argv, long connectionId) {
         // 관측 꺼짐 시 nanoTime() 비용도 생략
         long startNanos = events.enabled() ? System.nanoTime() : 0;
+        List<byte[]> args = argv.subList(1, argv.size());
 
         RespValue reply;
+        context.propagation().begin(argv);
         try {
             reply = command.execute(context, args);
         } catch (RuntimeException e) {
@@ -159,6 +228,8 @@ final class CommandLoop implements AutoCloseable {
             log("명령 %s 처리 중 예외: %s", command.name(), e);
             reply = Errors.internal(e.getClass().getSimpleName());
         }
+        // 예외로 끝나도 이미 바꾼 만큼은 기록
+        aof.feedAll(context.propagation().finish());
 
         if (events.enabled()) {
             events.publish(Event.command(connectionId, command.name(), args, System.nanoTime() - startNanos, reply));

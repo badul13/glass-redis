@@ -25,6 +25,7 @@ public final class MsetCommand implements Command {
         for (int i = 0; i < args.size(); i += 2) {
             ctx.keyspace().put(new Key(args.get(i)), Entry.of(args.get(i + 1)));
         }
+        ctx.dirty(args.size() / 2);
         return RespValue.OK;
     }
 }

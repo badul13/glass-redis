@@ -1,6 +1,7 @@
 package glassredis.command;
 
 import glassredis.command.impl.AppendCommand;
+import glassredis.command.impl.BgrewriteaofCommand;
 import glassredis.command.impl.DelCommand;
 import glassredis.command.impl.EchoCommand;
 import glassredis.command.impl.ExistsCommand;
@@ -81,10 +82,13 @@ public final class CommandRegistry {
 
         registry.register(ExpireCommand.seconds());
         registry.register(ExpireCommand.milliseconds());
+        registry.register(ExpireCommand.secondsAt());
+        registry.register(ExpireCommand.millisecondsAt());
         registry.register(TtlCommand.seconds());
         registry.register(TtlCommand.milliseconds());
         registry.register(new PersistCommand());
         registry.register(new TypeCommand());
+        registry.register(new BgrewriteaofCommand());
         registry.register(new ObjectCommand());
 
         registry.register(PushCommand.left());
@@ -98,6 +102,7 @@ public final class CommandRegistry {
         registry.register(new LtrimCommand());
 
         registry.register(new HsetCommand());
+        registry.register(HsetCommand.hmset());
         registry.register(HgetCommand.single());
         registry.register(HgetCommand.multiple());
         registry.register(new HdelCommand());

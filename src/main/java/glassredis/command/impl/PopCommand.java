@@ -72,8 +72,10 @@ public final class PopCommand implements Command {
                 popped.add(new RespValue.BulkString(list.pop(left)));
             }
             reply = new RespValue.Array(popped);
+            ctx.dirty(popped.size());
         } else {
             reply = new RespValue.BulkString(list.pop(left));
+            ctx.dirty();
         }
 
         if (list.length() == 0) {

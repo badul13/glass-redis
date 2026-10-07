@@ -1,9 +1,11 @@
 package glassredis.server;
 
 import glassredis.command.CommandRegistry;
+import glassredis.observe.AofSnapshot;
 import glassredis.observe.EventBus;
 import glassredis.observe.KeyspaceSnapshot;
 import glassredis.observe.SortedSetSnapshot;
+import glassredis.persistence.AppendOnlyLog;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 
@@ -11,6 +13,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -32,6 +35,9 @@ public final class RedisServer implements AutoCloseable {
 
     private final EventBus events;
 
+    /** null이면 기본 설정(appendonly no)으로 생성 */
+    private AppendOnlyLog aof;
+
     private final AtomicLong nextConnectionId = new AtomicLong(1);
     private final CountDownLatch stopped = new CountDownLatch(1);
 
@@ -45,21 +51,32 @@ public final class RedisServer implements AutoCloseable {
     }
 
     public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events) {
+        this(bindAddress, port, registry, events, null);
+    }
+
+    public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events, AppendOnlyLog aof) {
         this.bindAddress = bindAddress;
         this.requestedPort = port;
         this.registry = registry;
         this.events = events;
+        this.aof = aof;
     }
 
-    /** 즉시 반환 */
+    /** 즉시 반환 - AOF 복구는 소켓 열기 전에 끝냄 */
     public void start() throws IOException {
+        Keyspace keyspace = new Keyspace(events);
+        if (aof == null) {
+            aof = new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events);
+        }
+        aof.start(keyspace, registry);
+
         serverSocket = new ServerSocket();
         // 재시작 시 TIME_WAIT 주소 재사용
         serverSocket.setReuseAddress(true);
         serverSocket.bind(new InetSocketAddress(bindAddress, requestedPort), BACKLOG);
 
         running = true;
-        commandLoop = new CommandLoop(new Keyspace(events), events, this::close);
+        commandLoop = new CommandLoop(keyspace, events, aof, this::close);
         commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
@@ -73,6 +90,18 @@ public final class RedisServer implements AutoCloseable {
     /** 실행 스레드에서 스냅샷 - 서버 종료 중이거나 1초 내 미수신 시 null */
     public KeyspaceSnapshot keyspaceSnapshot() {
         return inspect(keyspace -> KeyspaceSnapshot.of(keyspace, KeyspaceSnapshot.DEFAULT_MAX_KEYS));
+    }
+
+    /** keyspaceSnapshot()과 같은 방식 */
+    public AofSnapshot aofSnapshot() {
+        try {
+            return commandLoop.aofSnapshot().get(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (ExecutionException | TimeoutException e) {
+            return null;
+        }
     }
 
     /** keyspaceSnapshot()과 같은 방식 */

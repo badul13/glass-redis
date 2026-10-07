@@ -104,5 +104,8 @@ function Body({ event }: { event: ActivityEvent }) {
       )
     case 'expiryCycle':
       return null
+    default:
+      // AOF 이벤트는 AOF 패널 몫 - 스트림에 오지 않음
+      return null
   }
 }

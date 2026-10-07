@@ -52,12 +52,63 @@ export interface ExpiryCycleCompleted extends Stamped {
   stalePercent: number
 }
 
+/** beforeSleep에서 OS로 넘긴 AOF 묶음 - 디스크 확정은 AofFsynced */
+export interface AofWritten extends Stamped {
+  type: 'aofWritten'
+  /** 화면용 명령 문자열 - 최대 24개 */
+  commands: string[]
+  omitted: number
+  bytes: number
+  file: string
+  fileBytes: number
+  /** base + incr 전체 */
+  totalBytes: number
+}
+
+export interface AofFsynced extends Stamped {
+  type: 'aofFsynced'
+  file: string
+  /** 디스크까지 확정된 파일 위치 */
+  bytes: number
+  nanos: number
+}
+
+export interface AofRewriteStarted extends Stamped {
+  type: 'aofRewriteStarted'
+  /** BGREWRITEAOF 또는 자동 (증가율) */
+  trigger: string
+  keys: number
+  sizeBefore: number
+  /** 실행 스레드에서 직렬화한 시간 - 그동안 다른 명령 대기 */
+  serializeNanos: number
+  baseBytes: number
+  newIncr: string
+}
+
+export interface AofRewriteFinished extends Stamped {
+  type: 'aofRewriteFinished'
+  base: string
+  baseBytes: number
+  sizeBefore: number
+  sizeAfter: number
+  nanos: number
+  removed: string[]
+}
+
+export interface AofRewriteFailed extends Stamped {
+  type: 'aofRewriteFailed'
+  reason: string
+}
+
+export type AofEvent = AofWritten | AofFsynced | AofRewriteStarted | AofRewriteFinished | AofRewriteFailed
+
 export type ActivityEvent =
   | ClientConnected
   | ClientDisconnected
   | CommandExecuted
   | KeyRemoved
   | ExpiryCycleCompleted
+  | AofEvent
 
 export interface ActivityBatch {
   /** 화면이 못 따라가 서버가 버린 개수 */
@@ -106,4 +157,34 @@ export interface SortedSetSnapshot {
   /** 머리 노드의 층별 span */
   header: number[]
   nodes: SortedSetMember[]
+}
+
+export interface AofFile {
+  name: string
+  /** b - base, h - 지울 예정, i - incr */
+  type: 'b' | 'h' | 'i'
+  seq: number
+  bytes: number
+}
+
+export interface AofSnapshot {
+  enabled: boolean
+  fsync: 'always' | 'everysec' | 'no'
+  /** base + incr 전체 (aof_current_size) */
+  currentSize: number
+  /** 마지막 재작성 직후 크기 - 자동 재작성 증가율 기준 */
+  baseSize: number
+  rewritePercentage: number
+  rewriteMinSize: number
+  rewriting: boolean
+  /** OS로 넘겼지만 fsync 전 - 정전 시 잃을 수 있는 양 */
+  unsyncedBytes: number
+  /** 마지막 fsync 이후 ms - 없으면 -1 */
+  lastFsyncAgo: number
+  loadStatus: 'OK' | 'NOT_EXIST' | 'EMPTY' | 'TRUNCATED' | 'FAILED' | 'OFF'
+  loadedCommands: number
+  loadMillis: number
+  truncatedFile: string | null
+  rewrites: number
+  files: AofFile[]
 }

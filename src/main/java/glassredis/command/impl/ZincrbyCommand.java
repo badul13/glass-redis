@@ -49,6 +49,10 @@ public final class ZincrbyCommand implements Command {
         if (Double.isNaN(score)) {
             return Errors.scoreIsNaN();
         }
+        // 점수가 그대로면 갱신 없음 - 전파 안 함
+        if (current == null || score != current) {
+            ctx.dirty();
+        }
         zset.put(member, score);
         if (entry == null) {
             keyspace.put(key, Entry.of(zset));

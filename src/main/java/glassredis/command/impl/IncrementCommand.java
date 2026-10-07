@@ -97,6 +97,7 @@ public final class IncrementCommand implements Command {
 
         StringValue text = StringValue.ofLong(updated);
         keyspace.put(key, entry == null ? Entry.of(text) : entry.withValue(text));
+        ctx.dirty();
         return new RespValue.Int(updated);
     }
 }

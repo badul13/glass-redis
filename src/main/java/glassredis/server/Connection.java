@@ -86,7 +86,7 @@ final class Connection implements Runnable {
             } else {
                 // 응답 수신 전 다음 명령 읽기 보류 - 파이프라인 순서 보장
                 try {
-                    reply = commandLoop.submit(command, argv.subList(1, argv.size()), id).get();
+                    reply = commandLoop.submit(command, argv, id).get();
                 } catch (InterruptedException e) {
                     // 서버 종료
                     Thread.currentThread().interrupt();

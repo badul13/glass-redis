@@ -43,10 +43,13 @@ public final class LtrimCommand implements Command {
 
         IndexRange range = IndexRange.of(start.getAsLong(), stop.getAsLong(), list.size());
         if (range == null) {
+            ctx.dirty(list.length());
             ctx.keyspace().remove(key);
             return RespValue.OK;
         }
+        long before = list.length();
         list.trim(range.start(), list.length() - 1 - range.end());
+        ctx.dirty(before - list.length());
         list.afterShrink();
         return RespValue.OK;
     }

@@ -35,6 +35,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Timeout(10)
 class CommandLoopTest {
 
+    /** 이름만 있는 인자 */
+    private static final List<byte[]> STUB = List.of("STUB".getBytes(StandardCharsets.UTF_8));
+
     private CommandLoop loop;
 
     @BeforeEach
@@ -62,7 +65,7 @@ class CommandLoopTest {
         try (ExecutorService clients = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<RespValue>> replies = new ArrayList<>();
             for (int i = 0; i < 1000; i++) {
-                replies.add(clients.submit(() -> loop.submit(recordThread, List.of(), 1).get()));
+                replies.add(clients.submit(() -> loop.submit(recordThread, STUB, 1).get()));
             }
             for (Future<RespValue> reply : replies) {
                 assertEquals(RespValue.OK, reply.get());
@@ -82,8 +85,8 @@ class CommandLoopTest {
         Command healthy = new StubCommand(ctx -> RespValue.OK);
 
         assertEquals(new RespValue.Err("ERR internal error: IllegalStateException"),
-                loop.submit(broken, List.of(), 1).get());
-        assertEquals(RespValue.OK, loop.submit(healthy, List.of(), 1).get());
+                loop.submit(broken, STUB, 1).get());
+        assertEquals(RespValue.OK, loop.submit(healthy, STUB, 1).get());
     }
 
     @Test
@@ -105,7 +108,7 @@ class CommandLoopTest {
             // 크기도 실행 스레드에서 조회 - size() 는 get() 을 부르지 않으므로 줄어든 만큼이 샘플링 삭제분
             Command size = new StubCommand(ctx -> new RespValue.Int(ctx.keyspace().size()));
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (!expiringLoop.submit(size, List.of(), 1).get().equals(new RespValue.Int(0))) {
+            while (!expiringLoop.submit(size, STUB, 1).get().equals(new RespValue.Int(0))) {
                 assertTrue(System.nanoTime() < deadline, "5초 안에 샘플링이 만료 키를 치워야 한다");
                 Thread.sleep(20);
             }
@@ -124,7 +127,7 @@ class CommandLoopTest {
         observed.start();
         try {
             Command stub = new StubCommand(ctx -> RespValue.OK);
-            List<byte[]> args = List.of("key".getBytes(StandardCharsets.UTF_8));
+            List<byte[]> args = List.of("STUB".getBytes(StandardCharsets.UTF_8), "key".getBytes(StandardCharsets.UTF_8));
 
             assertEquals(RespValue.OK, observed.submit(stub, args, 7).get());
 

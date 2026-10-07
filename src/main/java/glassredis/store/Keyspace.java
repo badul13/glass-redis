@@ -8,6 +8,7 @@ import glassredis.store.encoding.Dict;
 import java.time.InstantSource;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * 키스페이스 - redisDb처럼 dict(키 → 값)와 expires(키 → 만료 ms) 분리
@@ -23,6 +24,13 @@ public final class Keyspace {
     private final InstantSource clock;
 
     private final EventBus events;
+
+    /** 만료 삭제 알림 - AOF에 DEL 전파 (propagateDeletion) */
+    private Consumer<Key> expiredListener = key -> {
+    };
+
+    /** AOF 로딩 중 - 만료 판단 중지 (keyIsExpired, checkAlreadyExpired) */
+    private boolean loading;
 
     public Keyspace() {
         this(InstantSource.system(), EventBus.NONE);
@@ -44,6 +52,19 @@ public final class Keyspace {
     /** 에포크 ms - 명령의 만료 시각 계산도 이 시계 기준, 판단 불일치 방지 */
     public long now() {
         return clock.millis();
+    }
+
+    public void setExpiredListener(Consumer<Key> listener) {
+        this.expiredListener = Objects.requireNonNull(listener, "listener");
+    }
+
+    public void setLoading(boolean loading) {
+        this.loading = loading;
+    }
+
+    /** 로딩 중이면 지난 만료 시각도 그대로 저장 - 삭제는 로딩 후 만료 처리가 DEL로 */
+    public boolean loading() {
+        return loading;
     }
 
     /** 없거나 만료 시 null, 만료 키는 이 시점 삭제 - lookupKey → expireIfNeeded */
@@ -95,6 +116,9 @@ public final class Keyspace {
 
     /** 만료 시 삭제 후 true - 지연 만료, 주기적 만료 공통 경로 */
     public boolean expireIfDue(Key key, RemovalReason reason) {
+        if (loading) {
+            return false;
+        }
         Long expireAt = expires.get(key);
         long now = now();
         // 같은 ms에는 생존 - now > when
@@ -102,6 +126,7 @@ public final class Keyspace {
             return false;
         }
         delete(key);
+        expiredListener.accept(key);
         if (events.enabled()) {
             // 세 번째 인자 - 만료 시각부터 실제 삭제까지 지연(ms)
             events.publish(Event.keyRemoved(key.bytes(), reason, now - expireAt));

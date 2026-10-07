@@ -11,12 +11,31 @@ import glassredis.store.Keyspace;
 
 import java.util.List;
 
-/** HSET key field value [field value ...] - 새 필드 수만 집계, 값만 바뀐 필드 제외 */
+/**
+ * HSET key field value [field value ...] - 새 필드 수만 집계, 값만 바뀐 필드 제외
+ * HMSET - 같은 동작에 응답만 OK, AOF 재작성 결과가 쓰는 형태
+ */
 public final class HsetCommand implements Command {
+
+    private final String name;
+    private final boolean replyOk;
+
+    public HsetCommand() {
+        this("HSET", false);
+    }
+
+    private HsetCommand(String name, boolean replyOk) {
+        this.name = name;
+        this.replyOk = replyOk;
+    }
+
+    public static HsetCommand hmset() {
+        return new HsetCommand("HMSET", true);
+    }
 
     @Override
     public String name() {
-        return "HSET";
+        return name;
     }
 
     @Override
@@ -46,6 +65,7 @@ public final class HsetCommand implements Command {
                 created++;
             }
         }
-        return new RespValue.Int(created);
+        ctx.dirty((args.size() - 1) / 2);
+        return replyOk ? RespValue.OK : new RespValue.Int(created);
     }
 }

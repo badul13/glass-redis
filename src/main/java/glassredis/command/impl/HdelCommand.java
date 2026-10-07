@@ -38,6 +38,7 @@ public final class HdelCommand implements Command {
                 removed++;
             }
         }
+        ctx.dirty(removed);
         if (hash.size() == 0) {
             ctx.keyspace().remove(key);
         }

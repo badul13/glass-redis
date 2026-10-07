@@ -38,6 +38,7 @@ public final class ZremCommand implements Command {
                 removed++;
             }
         }
+        ctx.dirty(removed);
         if (zset.size() == 0) {
             ctx.keyspace().remove(key);
         }

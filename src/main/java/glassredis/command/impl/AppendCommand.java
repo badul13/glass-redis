@@ -34,6 +34,7 @@ public final class AppendCommand implements Command {
 
         if (entry == null) {
             ctx.keyspace().put(key, Entry.of(suffix));
+            ctx.dirty();
             return new RespValue.Int(suffix.length);
         }
 
@@ -50,6 +51,7 @@ public final class AppendCommand implements Command {
         System.arraycopy(suffix, 0, joined, current.length, suffix.length);
         // APPEND 결과는 길이 무관 raw - Redis와 동일
         ctx.keyspace().put(key, entry.withValue(StringValue.raw(joined)));
+        ctx.dirty();
         return new RespValue.Int(joinedLength);
     }
 }

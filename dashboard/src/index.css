@@ -691,3 +691,193 @@ table.keys td.type .encoding {
     background: #7a5a24;
   }
 }
+
+/* 왼쪽 - 명령 스트림 아래 AOF */
+
+.main-col {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+/* AOF 패널 */
+
+.aof {
+  --base: #6fa8dc;
+  --incr: var(--ok);
+  --hist: var(--faint);
+}
+
+.aof-files {
+  display: flex;
+  gap: 6px;
+  padding: 12px 14px 4px;
+}
+
+.aof-file {
+  min-width: 72px;
+  flex-basis: 0;
+  transition: flex-grow 0.6s ease;
+}
+
+.aof-file .bar {
+  position: relative;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--incr);
+  transition: background-color 0.4s;
+}
+
+.aof-file.type-b .bar {
+  background: var(--base);
+}
+
+/* 재작성으로 밀려나 곧 지워질 파일 */
+.aof-file.type-h .bar {
+  background: repeating-linear-gradient(135deg, #2b3338 0 4px, #1c2226 4px 8px);
+}
+
+/* fsync 전 - OS 캐시에만 있는 끝부분 */
+.aof-file .unsynced {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, rgba(14, 17, 19, 0.55) 0 3px, transparent 3px 6px);
+  transition: width 0.3s;
+}
+
+.aof-file .label {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aof-file .kind {
+  color: var(--dim);
+}
+
+.aof-file.type-b .kind {
+  color: var(--base);
+}
+
+.aof-file.type-i .kind {
+  color: var(--incr);
+}
+
+.aof-file .name,
+.aof-file .size {
+  color: var(--faint);
+}
+
+.aof-gauge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.aof-gauge .track {
+  flex: none;
+  width: 120px;
+  height: 5px;
+  border-radius: 3px;
+  background: #222a2f;
+  overflow: hidden;
+}
+
+.aof-gauge .track i {
+  display: block;
+  height: 100%;
+  background: var(--active);
+  transition: width 0.3s;
+}
+
+.aof-gauge .pending {
+  color: var(--active);
+}
+
+.aof-tail {
+  height: 168px;
+  overflow-y: auto;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.aof-line {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 10px;
+  border-left: 2px solid #2a3439;
+}
+
+.aof-line.meta {
+  color: var(--faint);
+}
+
+.aof-line.del {
+  color: var(--deleted);
+}
+
+.aof-mark {
+  font-size: 11px;
+  color: var(--faint);
+  padding: 1px 0 3px 10px;
+}
+
+.aof-mark.fsync {
+  color: var(--ok);
+}
+
+.aof-mark.rewrite {
+  color: var(--active);
+  border-top: 1px dashed #3a3026;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.aof-mark.rewrite.done {
+  border-top: none;
+  border-bottom: 1px dashed #3a3026;
+  margin: 0 0 4px;
+  padding-bottom: 4px;
+}
+
+.aof-mark.failed {
+  color: var(--error);
+}
+
+.aof-foot {
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--dim);
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.aof-foot b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.aof-foot .rewriting {
+  color: var(--active);
+}
+
+.aof-foot .warn {
+  color: var(--active);
+}

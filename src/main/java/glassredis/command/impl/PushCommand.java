@@ -63,6 +63,7 @@ public final class PushCommand implements Command {
         for (byte[] value : values) {
             list.push(value, left);
         }
+        ctx.dirty();
         return new RespValue.Int(list.length());
     }
 }

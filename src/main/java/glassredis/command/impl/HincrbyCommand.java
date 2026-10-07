@@ -65,6 +65,7 @@ public final class HincrbyCommand implements Command {
         }
 
         hash.set(field, Numbers.toBytes(updated));
+        ctx.dirty();
         // 실패 시 빈 Hash 잔존 방지 - 검사 후 삽입
         if (entry == null) {
             keyspace.put(key, Entry.of(hash));

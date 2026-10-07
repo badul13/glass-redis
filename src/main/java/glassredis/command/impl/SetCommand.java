@@ -11,6 +11,7 @@ import glassredis.store.Keyspace;
 import glassredis.store.StringValue;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.OptionalLong;
@@ -133,6 +134,25 @@ public final class SetCommand implements Command {
         }
         // 지난 EXAT/PXAT도 저장 - 다음 조회 시 만료
         keyspace.put(key, new Entry(StringValue.of(args.get(1)), expireAt));
+        ctx.dirty();
+        if (expiry != null && expiry != ExpiryOption.PXAT) {
+            // 상대 시간은 재시작 후 밀리므로 절대 시각으로 - 다른 옵션은 버림
+            ctx.propagateAs("SET", args.get(0), args.get(1), "PXAT", expireAt);
+        } else if (get && expiry == null) {
+            ctx.propagation().rewrite(withoutGet(ctx.propagation().argv()));
+        }
         return get ? previousValue : RespValue.OK;
+    }
+
+    /** 값 뒤의 GET 전부 제거 - 이름·키·값 자리는 그대로 */
+    private static List<byte[]> withoutGet(List<byte[]> argv) {
+        List<byte[]> kept = new ArrayList<>(argv.size());
+        for (int i = 0; i < argv.size(); i++) {
+            if (i >= 3 && "GET".equalsIgnoreCase(new String(argv.get(i), StandardCharsets.US_ASCII))) {
+                continue;
+            }
+            kept.add(argv.get(i));
+        }
+        return kept;
     }
 }

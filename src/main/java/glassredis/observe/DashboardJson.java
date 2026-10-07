@@ -76,6 +76,51 @@ final class DashboardJson {
         return out.toString();
     }
 
+    static String aof(AofSnapshot snapshot) {
+        StringBuilder out = new StringBuilder(256 + snapshot.files().size() * 96);
+        out.append('{');
+        Json.field(out, "enabled", snapshot.enabled());
+        Json.field(out, "fsync", snapshot.fsync());
+        Json.field(out, "currentSize", snapshot.currentSize());
+        Json.field(out, "baseSize", snapshot.baseSize());
+        Json.field(out, "rewritePercentage", snapshot.rewritePercentage());
+        Json.field(out, "rewriteMinSize", snapshot.rewriteMinSize());
+        Json.field(out, "rewriting", snapshot.rewriting());
+        Json.field(out, "unsyncedBytes", snapshot.unsyncedBytes());
+        Json.field(out, "lastFsyncAgo", snapshot.lastFsyncAgoMillis());
+        Json.field(out, "loadStatus", snapshot.loadStatus());
+        Json.field(out, "loadedCommands", snapshot.loadedCommands());
+        Json.field(out, "loadMillis", snapshot.loadMillis());
+        Json.field(out, "truncatedFile", snapshot.truncatedFile());
+        Json.field(out, "rewrites", snapshot.rewrites());
+        Json.name(out, "files");
+        out.append('[');
+        for (AofSnapshot.FileView file : snapshot.files()) {
+            if (out.charAt(out.length() - 1) != '[') {
+                out.append(',');
+            }
+            out.append('{');
+            Json.field(out, "name", file.name());
+            Json.field(out, "type", String.valueOf(file.type()));
+            Json.field(out, "seq", file.seq());
+            Json.field(out, "bytes", file.bytes());
+            out.append('}');
+        }
+        out.append("]}");
+        return out.toString();
+    }
+
+    private static void appendStrings(StringBuilder out, List<String> texts) {
+        out.append('[');
+        for (int i = 0; i < texts.size(); i++) {
+            if (i > 0) {
+                out.append(',');
+            }
+            Json.string(out, texts.get(i));
+        }
+        out.append(']');
+    }
+
     private static void appendNumbers(StringBuilder out, List<Long> numbers) {
         out.append('[');
         for (int i = 0; i < numbers.size(); i++) {
@@ -124,6 +169,45 @@ final class DashboardJson {
                 Json.field(out, "nanos", cycle.durationNanos());
                 Json.field(out, "timeLimitHit", cycle.timeLimitHit());
                 Json.field(out, "stalePercent", cycle.stalePercent());
+            }
+            case Event.AofWritten written -> {
+                Json.field(out, "type", "aofWritten");
+                Json.name(out, "commands");
+                appendStrings(out, written.commands());
+                Json.field(out, "omitted", written.omitted());
+                Json.field(out, "bytes", written.bytes());
+                Json.field(out, "file", written.file());
+                Json.field(out, "fileBytes", written.fileBytes());
+                Json.field(out, "totalBytes", written.totalBytes());
+            }
+            case Event.AofFsynced synced -> {
+                Json.field(out, "type", "aofFsynced");
+                Json.field(out, "file", synced.file());
+                Json.field(out, "bytes", synced.bytes());
+                Json.field(out, "nanos", synced.durationNanos());
+            }
+            case Event.AofRewriteStarted started -> {
+                Json.field(out, "type", "aofRewriteStarted");
+                Json.field(out, "trigger", started.trigger());
+                Json.field(out, "keys", started.keys());
+                Json.field(out, "sizeBefore", started.sizeBefore());
+                Json.field(out, "serializeNanos", started.serializeNanos());
+                Json.field(out, "baseBytes", started.baseBytes());
+                Json.field(out, "newIncr", started.newIncr());
+            }
+            case Event.AofRewriteFinished finished -> {
+                Json.field(out, "type", "aofRewriteFinished");
+                Json.field(out, "base", finished.base());
+                Json.field(out, "baseBytes", finished.baseBytes());
+                Json.field(out, "sizeBefore", finished.sizeBefore());
+                Json.field(out, "sizeAfter", finished.sizeAfter());
+                Json.field(out, "nanos", finished.durationNanos());
+                Json.name(out, "removed");
+                appendStrings(out, finished.removedFiles());
+            }
+            case Event.AofRewriteFailed failed -> {
+                Json.field(out, "type", "aofRewriteFailed");
+                Json.field(out, "reason", failed.reason());
             }
         }
         out.append('}');

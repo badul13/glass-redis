@@ -47,6 +47,7 @@ public final class LremCommand implements Command {
         // Long.MIN_VALUE - 부호 반전 불가라 제한 없음 취급, 결과 동일
         long limit = count == 0 || count == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(count);
         long removed = list.remove(target, limit, count < 0);
+        ctx.dirty(removed);
 
         if (list.length() == 0) {
             ctx.keyspace().remove(key);

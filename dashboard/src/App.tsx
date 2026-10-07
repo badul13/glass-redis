@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AofPanel } from './components/AofPanel'
 import { CommandStream } from './components/CommandStream'
 import { ExpiryPanel } from './components/ExpiryPanel'
 import { KeyspaceView } from './components/KeyspaceView'
@@ -33,7 +34,10 @@ export default function App() {
       </header>
 
       <main className="grid">
-        <CommandStream rows={dashboard.rows} />
+        <div className="main-col">
+          <CommandStream rows={dashboard.rows} />
+          <AofPanel {...dashboard} />
+        </div>
         <div className="side">
           <KeyspaceView snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
           <ExpiryPanel {...dashboard} />

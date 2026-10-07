@@ -27,6 +27,7 @@ public final class DelCommand implements Command {
                 removed++;
             }
         }
+        ctx.dirty(removed);
         return new RespValue.Int(removed);
     }
 }

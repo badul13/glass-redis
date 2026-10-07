@@ -3,9 +3,13 @@ package glassredis;
 import glassredis.command.CommandRegistry;
 import glassredis.observe.DashboardServer;
 import glassredis.observe.EventHub;
+import glassredis.persistence.AofLoader;
+import glassredis.persistence.AppendOnlyLog;
 import glassredis.server.RedisServer;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Locale;
 
 public final class Main {
 
@@ -20,6 +24,13 @@ public final class Main {
         String bind = DEFAULT_BIND;
         int dashboardPort = DashboardServer.DEFAULT_PORT;
         boolean dashboard = true;
+        // AOF - Redis 기본값
+        AppendOnlyLog.Config defaults = AppendOnlyLog.Config.defaults(Path.of("."));
+        Path dir = defaults.dir();
+        boolean appendOnly = defaults.enabled();
+        AppendOnlyLog.FsyncPolicy fsync = defaults.fsync();
+        int rewritePercentage = defaults.rewritePercentage();
+        long rewriteMinSize = defaults.rewriteMinSize();
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -28,6 +39,14 @@ public final class Main {
                 case "--dashboard-port" ->
                         dashboardPort = Integer.parseInt(requireValue(args, ++i, "--dashboard-port"));
                 case "--no-dashboard" -> dashboard = false;
+                case "--dir" -> dir = Path.of(requireValue(args, ++i, "--dir"));
+                case "--appendonly" -> appendOnly = yesNo(requireValue(args, ++i, "--appendonly"), "--appendonly");
+                case "--appendfsync" ->
+                        fsync = AppendOnlyLog.FsyncPolicy.parse(requireValue(args, ++i, "--appendfsync"));
+                case "--auto-aof-rewrite-percentage" ->
+                        rewritePercentage = Integer.parseInt(requireValue(args, ++i, "--auto-aof-rewrite-percentage"));
+                case "--auto-aof-rewrite-min-size" ->
+                        rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
                 case "--help", "-h" -> {
                     printUsage();
                     return;
@@ -45,8 +64,11 @@ public final class Main {
         // 구독자 없으면 이벤트 생성 생략
         EventHub events = new EventHub();
 
-        RedisServer server = new RedisServer(bind, port, registry, events);
+        AppendOnlyLog aof = new AppendOnlyLog(
+                new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize), events);
+        RedisServer server = new RedisServer(bind, port, registry, events, aof);
         server.start();
+        reportAof(aof);
 
         System.out.printf("[glass-redis] %s:%d 에서 대기 중입니다. 지원 명령 %d개: %s%n",
                 bind, server.port(), registry.size(), registry.names());
@@ -67,7 +89,7 @@ public final class Main {
     /** 대시보드 기동 실패 시 서버 유지 - 경고만 출력 */
     private static DashboardServer startDashboard(String bind, int port, EventHub events, RedisServer server) {
         DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot,
-                server::sortedSetSnapshot);
+                server::sortedSetSnapshot).withAof(server::aofSnapshot);
         try {
             dashboard.start();
             System.out.printf("[glass-redis] 대시보드: http://%s:%d%n", bind, dashboard.port());
@@ -77,6 +99,49 @@ public final class Main {
                     port, e.getMessage());
             return null;
         }
+    }
+
+    /** 기동 시 복구 결과 - Redis 로그처럼 */
+    private static void reportAof(AppendOnlyLog aof) {
+        if (!aof.enabled()) {
+            return;
+        }
+        AofLoader.Result loaded = aof.loadResult();
+        switch (loaded.status()) {
+            case OK, TRUNCATED -> System.out.printf("[glass-redis] AOF 에서 명령 %d개를 다시 실행해 복구했습니다 (%d바이트, %dms)%s%n",
+                    loaded.commands(), loaded.bytes(), loaded.elapsedMillis(),
+                    loaded.truncatedFile() == null ? "" : " - " + loaded.truncatedFile() + " 끝부분 잘라냄");
+            case EMPTY, NOT_EXIST -> System.out.println("[glass-redis] AOF 가 비어 있어 빈 데이터로 시작합니다");
+            case FAILED -> {
+                // start() 에서 예외 - 도달 불가
+            }
+        }
+        System.out.printf("[glass-redis] AOF: %s (appendfsync %s)%n", aof.directory().toAbsolutePath().normalize(),
+                aof.config().fsync().configName());
+    }
+
+    private static boolean yesNo(String value, String option) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "yes" -> true;
+            case "no" -> false;
+            default -> throw new IllegalArgumentException(option + " 에는 yes 또는 no 가 필요합니다");
+        };
+    }
+
+    /** Redis 메모리 표기 - 1k=1000, 1kb=1024, m·mb, g·gb */
+    static long memory(String value) {
+        String text = value.toLowerCase(Locale.ROOT);
+        long unit = 1;
+        String[][] units = {{"gb", "1073741824"}, {"mb", "1048576"}, {"kb", "1024"}, {"g", "1000000000"},
+                {"m", "1000000"}, {"k", "1000"}, {"b", "1"}};
+        for (String[] u : units) {
+            if (text.endsWith(u[0])) {
+                unit = Long.parseLong(u[1]);
+                text = text.substring(0, text.length() - u[0].length());
+                break;
+            }
+        }
+        return Math.multiplyExact(Long.parseLong(text), unit);
     }
 
     private static String requireValue(String[] args, int index, String option) {
@@ -94,6 +159,11 @@ public final class Main {
                   --bind, -b <주소>      리슨 주소 (기본 127.0.0.1, 도커에서 붙으려면 0.0.0.0)
                   --dashboard-port <번호>  대시보드 포트 (기본 8080)
                   --no-dashboard         대시보드를 띄우지 않는다
+                  --appendonly yes|no    AOF 기록·복구 (기본 no)
+                  --dir <폴더>           AOF 폴더(appendonlydir)를 둘 곳 (기본 현재 폴더)
+                  --appendfsync <정책>   always | everysec | no (기본 everysec)
+                  --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
+                  --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)
                   --help, -h             이 도움말
                 """);
     }
