@@ -6,8 +6,11 @@ Redis 서버를 Java로 직접 구현하고, **내부에서 벌어지는 일을 
 
 ## 현재 상태
 
-- 문자열 명령어와 만료 20개(`SET` `GET` `DEL` `INCR` `EXPIRE` `TTL` …), `redis-cli` 로 그대로 접속
+- 명령어 66개 — 문자열·만료(`SET` `GET` `EXPIRE` `TTL` …)와 List·Hash·Set·Sorted Set, `redis-cli` 로 그대로 접속
+- 자료형 내부 인코딩(listpack·intset·quicklist·스킵 리스트)과 전환 기준까지 Redis 7 과 같게, `OBJECT ENCODING` 으로 확인
 - 서버 내부를 실시간으로 그리는 대시보드 — 명령 스트림, 키스페이스, 만료
+- AOF — 데이터를 바꾼 명령을 파일에 쌓고, 껐다 켜면 다시 실행해 복구. 커지면 `BGREWRITEAOF` 로 압축
+  (파일 구성·기록 내용은 Redis 7 과 같게, 대시보드에 쌓이고 fsync 되고 압축되는 과정 표시)
 
 만료된 키가 **언제 실제로 지워지는지**가 대시보드에 그대로 나온다.
 `EX 10` 을 걸어도 10초에 지워지지 않고, 읽으러 온 명령이 발견하거나 100ms 마다 도는
@@ -37,6 +40,15 @@ Java 21 이상 필요
 대시보드는 Node 가 있으면 빌드가 알아서 만든다. 없으면 건너뛰고 서버만 돈다.
 
 옵션: `--port` `--bind` `--dashboard-port` `--no-dashboard`
+
+AOF 는 Redis 처럼 기본 꺼짐:
+
+```bash
+./gradlew run --args="--appendonly yes"                     # ./appendonlydir 에 기록
+./gradlew run --args="--appendonly yes --dir data --auto-aof-rewrite-min-size 64kb"
+```
+
+AOF 옵션: `--appendonly` `--dir` `--appendfsync` `--auto-aof-rewrite-percentage` `--auto-aof-rewrite-min-size`
 
 ## 라이선스
 
