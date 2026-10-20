@@ -87,6 +87,12 @@ public final class Keyspace {
         return new Entry(value, expireAt == null ? Entry.NO_EXPIRY : expireAt);
     }
 
+    /** RDB RESIZEDB - 넣을 키 수만큼 미리 확장, 로드 중 rehash 방지 */
+    public void expandForLoading(long keys, long expiringKeys) {
+        dict.expand(keys);
+        expires.expand(expiringKeys);
+    }
+
     /** 만료 없는 entry면 기존 만료도 제거 */
     public void put(Key key, Entry entry) {
         dict.put(key, entry.value());

@@ -8,7 +8,7 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * RDB 스냅샷 저장 - rdb.c rdbSave
+ * RDB 스냅샷 저장·복구 - rdb.c rdbSave, rdbLoad
  * 실행 스레드 전용 - SAVE는 직렬화부터 디스크 확정까지 실행 스레드에서, 그동안 명령 대기 (Redis와 동일)
  */
 public final class Snapshot {
@@ -27,6 +27,8 @@ public final class Snapshot {
     private final Config config;
     private final Path file;
 
+    private RdbLoader.Result loadResult;
+
     public Snapshot(Config config) {
         this.config = Objects.requireNonNull(config, "config");
         this.file = config.dir().resolve(config.filename());
@@ -38,6 +40,17 @@ public final class Snapshot {
 
     public Path file() {
         return file;
+    }
+
+    /** 기동 시 복구 - AOF 꺼져 있을 때만 (loadDataFromDisk) */
+    public RdbLoader.Result load(Keyspace keyspace) {
+        loadResult = RdbLoader.load(file, keyspace);
+        return loadResult;
+    }
+
+    /** 기동 시 읽지 않았으면 null */
+    public RdbLoader.Result loadResult() {
+        return loadResult;
     }
 
     /**

@@ -44,6 +44,54 @@ public final class SortedSetValue implements Value {
         return zset;
     }
 
+    /** RDB listpack 덩어리 - 비었으면 null, 128개 초과면 skiplist (멤버 길이는 안 봄) */
+    public static SortedSetValue ofListpack(Listpack listpack) {
+        if (listpack.length() == 0) {
+            return null;
+        }
+        SortedSetValue zset = new SortedSetValue();
+        zset.listpack = listpack;
+        if (zset.size() > MAX_LISTPACK_ENTRIES) {
+            zset.convertToSkipList(zset.size());
+        }
+        return zset;
+    }
+
+    /** RDB 멤버 나열 형식 - 일단 skiplist로 받고 finishLoading 에서 판단 */
+    public static SortedSetValue forLoading(long length) {
+        SortedSetValue zset = new SortedSetValue();
+        zset.dict = new Dict<>();
+        if (length > Dict.INITIAL_SIZE) {
+            zset.dict.expand(length);
+        }
+        zset.order = new SkipList();
+        return zset;
+    }
+
+    /** RDB 멤버 하나 추가 - 중복이면 false (손상) */
+    public boolean addLoaded(byte[] member, double score) {
+        if (!dict.add(new Key(member), score)) {
+            return false;
+        }
+        order.insert(score, member);
+        return true;
+    }
+
+    /** 다 읽은 뒤 한도 안이면 listpack - 점수 순 그대로 이어 붙임 (zsetConvert) */
+    public void finishLoading(int maxMemberLength) {
+        if (size() > MAX_LISTPACK_ENTRIES || maxMemberLength > MAX_LISTPACK_VALUE) {
+            return;
+        }
+        Listpack converted = new Listpack();
+        for (SkipList.Node node = order.first(); node != null; node = node.next()) {
+            converted.append(node.member());
+            converted.append(scoreBytes(node.score()));
+        }
+        listpack = converted;
+        dict = null;
+        order = null;
+    }
+
     @Override
     public String typeName() {
         return "zset";
@@ -231,9 +279,7 @@ public final class SortedSetValue implements Value {
 
     /** 정렬 유지 삽입 - zzlInsert */
     private void insertSorted(byte[] member, double score) {
-        byte[] scoreBytes = Doubles.isSmallInteger(score)
-                ? Long.toString((long) score).getBytes(java.nio.charset.StandardCharsets.US_ASCII)
-                : Doubles.format(score);
+        byte[] scoreBytes = scoreBytes(score);
         for (int p = listpack.first(); p != -1; p = listpack.next(listpack.next(p))) {
             double s = scoreAt(listpack.next(p));
             if (s > score || (s == score && Arrays.compareUnsigned(listpack.get(p), member) > 0)) {
@@ -244,6 +290,13 @@ public final class SortedSetValue implements Value {
         }
         listpack.append(member);
         listpack.append(scoreBytes);
+    }
+
+    /** 정수면 정수 원소, 아니면 문자열 원소 - zzlInsertAt 의 double2ll 분기 */
+    private static byte[] scoreBytes(double score) {
+        return Doubles.isSmallInteger(score)
+                ? Long.toString((long) score).getBytes(java.nio.charset.StandardCharsets.US_ASCII)
+                : Doubles.format(score);
     }
 
     private void convertToSkipList(long sizeHint) {

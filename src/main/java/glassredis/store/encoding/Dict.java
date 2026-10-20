@@ -12,7 +12,7 @@ import java.util.function.BiConsumer;
 public final class Dict<V> {
 
     static final int INITIAL_EXP = 2;
-    static final int INITIAL_SIZE = 1 << INITIAL_EXP;
+    public static final int INITIAL_SIZE = 1 << INITIAL_EXP;
     /** HASHTABLE_MIN_FILL */
     private static final int MIN_FILL_PERCENT = 10;
 

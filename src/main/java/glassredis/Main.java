@@ -5,6 +5,7 @@ import glassredis.observe.DashboardServer;
 import glassredis.observe.EventHub;
 import glassredis.persistence.AofLoader;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
 import glassredis.server.RedisServer;
 
@@ -73,6 +74,7 @@ public final class Main {
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
         server.start();
         reportAof(aof);
+        reportRdb(snapshot);
 
         System.out.printf("[glass-redis] %s:%d 에서 대기 중입니다. 지원 명령 %d개: %s%n",
                 bind, server.port(), registry.size(), registry.names());
@@ -103,6 +105,21 @@ public final class Main {
                     port, e.getMessage());
             return null;
         }
+    }
+
+    /** 기동 시 RDB 복구 결과 - AOF 로 복구했으면 생략 */
+    private static void reportRdb(Snapshot snapshot) {
+        RdbLoader.Result loaded = snapshot.loadResult();
+        if (loaded == null) {
+            return; // AOF 로 복구
+        }
+        if (loaded.status() == RdbLoader.Status.OK) {
+            System.out.printf("[glass-redis] RDB 에서 키 %d개를 복구했습니다 (만료로 버린 키 %d개, %d바이트, %dms, redis-ver %s)%n",
+                    loaded.keys(), loaded.expired(), loaded.bytes(), loaded.elapsedMillis(), loaded.createdBy());
+        } else {
+            System.out.println("[glass-redis] RDB 파일이 없어 빈 데이터로 시작합니다");
+        }
+        System.out.printf("[glass-redis] RDB: %s%n", snapshot.file().toAbsolutePath().normalize());
     }
 
     /** 기동 시 복구 결과 - Redis 로그처럼 */
@@ -165,7 +182,7 @@ public final class Main {
                   --no-dashboard         대시보드를 띄우지 않는다
                   --appendonly yes|no    AOF 기록·복구 (기본 no)
                   --dir <폴더>           AOF 폴더(appendonlydir)와 RDB 파일을 둘 곳 (기본 현재 폴더)
-                  --dbfilename <이름>    RDB 파일 이름 (기본 dump.rdb)
+                  --dbfilename <이름>    RDB 파일 이름 (기본 dump.rdb) - AOF 꺼져 있으면 기동 시 여기서 복구
                   --appendfsync <정책>   always | everysec | no (기본 everysec)
                   --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
                   --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)

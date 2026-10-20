@@ -42,6 +42,79 @@ public final class SetValue implements Value {
         return set;
     }
 
+    /** RDB intset 덩어리 - 512개 초과면 hashtable (rdbLoadObject RDB_TYPE_SET_INTSET) */
+    public static SetValue ofIntset(Intset intset) {
+        SetValue set = new SetValue();
+        set.intset = intset;
+        if (intset.length() > MAX_INTSET_ENTRIES) {
+            set.convertToDict(intset.length());
+        }
+        return set;
+    }
+
+    /** RDB listpack 덩어리 - 비었으면 null, 128개 초과면 hashtable */
+    public static SetValue ofListpack(Listpack listpack) {
+        if (listpack.length() == 0) {
+            return null;
+        }
+        SetValue set = new SetValue();
+        set.listpack = listpack;
+        if (listpack.length() > MAX_LISTPACK_ENTRIES) {
+            set.convertToDict(listpack.length());
+        }
+        return set;
+    }
+
+    /** RDB 원소 나열 형식 - 개수가 intset 한도 넘으면 처음부터 hashtable */
+    public static SetValue forLoading(long length) {
+        SetValue set = new SetValue();
+        if (length > MAX_INTSET_ENTRIES) {
+            set.dict = new Dict<>();
+            set.dict.expand(length);
+        } else {
+            set.intset = new Intset();
+        }
+        return set;
+    }
+
+    /**
+     * RDB 원소 하나 추가 - 중복이면 false (손상)
+     * 전환 규칙 - add 와 같되 hashtable 크기는 전체 개수 기준
+     *
+     * @param length           전체 원소 수
+     * @param maxElementLength 지금까지 읽은 원소 중 최대 길이 - 이 원소 포함
+     */
+    public boolean addLoaded(byte[] value, long length, int maxElementLength) {
+        if (intset != null) {
+            Long number = Listpack.toInt64(value);
+            if (number != null) {
+                return intset.add(number);
+            }
+            if (intset.length() < MAX_LISTPACK_ENTRIES && maxElementLength <= MAX_LISTPACK_VALUE) {
+                Listpack converted = new Listpack();
+                for (int i = 0; i < intset.length(); i++) {
+                    converted.append(Long.toString(intset.get(i)).getBytes(StandardCharsets.US_ASCII));
+                }
+                listpack = converted;
+                intset = null;
+            } else {
+                convertToDict(length);
+            }
+        }
+        if (listpack != null) {
+            if (listpack.length() < MAX_LISTPACK_ENTRIES && value.length <= MAX_LISTPACK_VALUE) {
+                int first = listpack.first();
+                if (first != -1 && listpack.find(first, value, 0) != -1) {
+                    return false;
+                }
+                listpack.append(value);
+                return true;
+            }
+            convertToDict(length);
+        }
+        return dict.add(new Key(value), Boolean.TRUE);
+    }
+
     /** SUNION, SDIFF 결과 수집용 임시 Set - createIntsetObject */
     public static SetValue emptyIntset() {
         SetValue set = new SetValue();

@@ -21,6 +21,53 @@ public final class HashValue implements Value {
     private Listpack listpack = new Listpack();
     private Dict<byte[]> dict;
 
+    /** RDB listpack 덩어리 - 비었으면 null, 512개 초과면 hashtable (값 길이는 안 봄) */
+    public static HashValue ofListpack(Listpack listpack) {
+        if (listpack.length() == 0) {
+            return null;
+        }
+        HashValue hash = new HashValue();
+        hash.listpack = listpack;
+        if (hash.size() > MAX_LISTPACK_ENTRIES) {
+            hash.convertToDict();
+        }
+        return hash;
+    }
+
+    /** RDB 필드 나열 형식 - 개수가 한도 넘으면 처음부터 hashtable */
+    public static HashValue forLoading(long length) {
+        HashValue hash = new HashValue();
+        if (length > MAX_LISTPACK_ENTRIES) {
+            hash.convertToDict();
+            hash.dict.expand(length);
+        }
+        return hash;
+    }
+
+    /**
+     * RDB 필드 하나 추가 - hashtable에서 중복이면 false (손상)
+     * listpack 단계는 중복 확인 없음 - sanitize-dump-payload no 와 동일
+     *
+     * @param remaining 이 필드 뒤에 남은 필드 수 - 전환 시 hashtable 크기
+     */
+    public boolean putLoaded(byte[] field, byte[] value, long remaining) {
+        if (dict == null) {
+            if (field.length <= MAX_LISTPACK_VALUE && value.length <= MAX_LISTPACK_VALUE) {
+                listpack.append(field);
+                listpack.append(value);
+                return true;
+            }
+            // 추가 후 남은 개수만큼 확장 - rdbLoadObject 순서
+            convertToDict();
+            boolean added = dict.add(new Key(field), value);
+            if (remaining > Dict.INITIAL_SIZE) {
+                dict.expand(remaining);
+            }
+            return added;
+        }
+        return dict.add(new Key(field), value);
+    }
+
     @Override
     public String typeName() {
         return "hash";

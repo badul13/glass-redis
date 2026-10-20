@@ -39,6 +39,25 @@ public final class Listpack {
         lp[HEADER_SIZE] = (byte) EOF;
     }
 
+    private Listpack(byte[] lp) {
+        this.lp = lp;
+    }
+
+    /**
+     * 파일에서 읽은 바이트 그대로 - lpValidateIntegrity 얕은 검사 (sanitize-dump-payload no)
+     * 헤더 총 바이트 = 실제 길이, 끝 0xFF 만 확인 - 원소 하나하나는 안 봄
+     *
+     * @throws IllegalArgumentException 검사 실패
+     */
+    public static Listpack fromBytes(byte[] bytes) {
+        Listpack listpack = new Listpack(bytes);
+        if (bytes.length < HEADER_SIZE + 1 || listpack.bytes() != bytes.length
+                || (bytes[bytes.length - 1] & 0xFF) != EOF) {
+            throw new IllegalArgumentException("Listpack integrity check failed.");
+        }
+        return listpack;
+    }
+
     // --- 헤더 ---
 
     /** 헤더의 총 바이트 수 - 인코딩 전환 판단용 */

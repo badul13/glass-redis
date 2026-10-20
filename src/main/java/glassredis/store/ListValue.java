@@ -16,6 +16,30 @@ public final class ListValue implements Value {
     private Listpack listpack = new Listpack();
     private Quicklist quicklist;
 
+    /**
+     * RDB 로드 - 노드를 복사 없이 quicklist로, 노드 하나에 8KB 이하면 listpack (LIST_CONV_AUTO)
+     * 빈 노드는 건너뜀, 전부 비었으면 null
+     */
+    public static ListValue fromNodes(List<Listpack> nodes) {
+        Quicklist loaded = new Quicklist();
+        for (Listpack node : nodes) {
+            if (node.length() > 0) {
+                loaded.appendListpack(node);
+            }
+        }
+        if (loaded.count() == 0) {
+            return null;
+        }
+        ListValue list = new ListValue();
+        if (loaded.nodeCount() == 1 && loaded.head().listpack().bytes() <= Quicklist.NODE_SIZE_LIMIT) {
+            list.listpack = loaded.head().listpack();
+        } else {
+            list.listpack = null;
+            list.quicklist = loaded;
+        }
+        return list;
+    }
+
     @Override
     public String typeName() {
         return "list";

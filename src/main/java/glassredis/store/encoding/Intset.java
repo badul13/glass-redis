@@ -1,5 +1,7 @@
 package glassredis.store.encoding;
 
+import java.util.Arrays;
+
 /**
  * 정렬된 정수 배열 - Redis 7.2 intset.c
  * 모든 원소 동일 폭(2/4/8바이트) - 넓은 값 유입 시 전체 재작성, 폭 축소 없음
@@ -16,6 +18,29 @@ public final class Intset {
     private int length;
     /** 헤더 없이 원소만 */
     private byte[] contents = new byte[0];
+
+    /**
+     * 파일에서 읽은 바이트 - intsetValidateIntegrity 얕은 검사
+     * 폭 2·4·8, 헤더 + 개수 × 폭 = 길이, 빈 intset 거부 - 정렬·중복은 안 봄
+     *
+     * @throws IllegalArgumentException 검사 실패
+     */
+    public static Intset fromBytes(byte[] bytes) {
+        if (bytes.length < HEADER) {
+            throw new IllegalArgumentException("Intset integrity check failed.");
+        }
+        int encoding = (int) readLe(bytes, 0, 4);
+        long count = readLe(bytes, 4, 4) & 0xFFFFFFFFL;
+        if ((encoding != ENC_INT16 && encoding != ENC_INT32 && encoding != ENC_INT64)
+                || HEADER + count * encoding != bytes.length || count == 0) {
+            throw new IllegalArgumentException("Intset integrity check failed.");
+        }
+        Intset intset = new Intset();
+        intset.encoding = encoding;
+        intset.length = (int) count;
+        intset.contents = Arrays.copyOfRange(bytes, HEADER, bytes.length);
+        return intset;
+    }
 
     public int length() {
         return length;

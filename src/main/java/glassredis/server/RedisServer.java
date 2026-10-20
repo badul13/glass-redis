@@ -6,6 +6,7 @@ import glassredis.observe.EventBus;
 import glassredis.observe.KeyspaceSnapshot;
 import glassredis.observe.SortedSetSnapshot;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
@@ -39,7 +40,7 @@ public final class RedisServer implements AutoCloseable {
     /** null이면 기본 설정(appendonly no)으로 생성 */
     private AppendOnlyLog aof;
 
-    /** null이면 SAVE 실패 */
+    /** null이면 RDB 없음 - 기동 로드 생략, SAVE 실패 (현재 폴더 dump.rdb 를 테스트가 읽지 않도록) */
     private final Snapshot snapshot;
 
     private final AtomicLong nextConnectionId = new AtomicLong(1);
@@ -72,13 +73,24 @@ public final class RedisServer implements AutoCloseable {
         this.snapshot = snapshot;
     }
 
-    /** 즉시 반환 - AOF 복구는 소켓 열기 전에 끝냄 */
+    /**
+     * 즉시 반환 - 복구는 소켓 열기 전에 끝냄
+     * AOF 켜져 있으면 AOF만, 아니면 RDB (loadDataFromDisk)
+     *
+     * @throws IOException 복구 실패 - 기동 중단
+     */
     public void start() throws IOException {
         Keyspace keyspace = new Keyspace(events);
         if (aof == null) {
             aof = new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events);
         }
         aof.start(keyspace, registry);
+        if (!aof.enabled() && snapshot != null) {
+            RdbLoader.Result loaded = snapshot.load(keyspace);
+            if (loaded.status() == RdbLoader.Status.FAILED) {
+                throw new IOException("RDB 복구 실패: " + loaded.error());
+            }
+        }
 
         serverSocket = new ServerSocket();
         // 재시작 시 TIME_WAIT 주소 재사용
