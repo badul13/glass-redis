@@ -4,10 +4,12 @@ import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.command.Propagation;
+import glassredis.command.ServerControl;
 import glassredis.observe.AofSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.Snapshot;
 import glassredis.resp.RespValue;
 import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
@@ -72,18 +74,28 @@ final class CommandLoop implements AutoCloseable {
     private volatile boolean running;
 
     CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
-        this(keyspace, events, new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events),
+        this(keyspace, events, new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events), null,
                 onFatalError);
     }
 
     /**
      * @param keyspace start() 이후 실행 스레드 전용
      * @param aof      복구까지 마친 상태 - 이후 실행 스레드 전용
+     * @param snapshot null이면 SAVE 실패
      */
-    CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Runnable onFatalError) {
+    CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Snapshot snapshot, Runnable onFatalError) {
         this.aof = aof;
-        this.context = new Context(keyspace, new Propagation(),
-                () -> aof.rewriteInBackground(keyspace, "BGREWRITEAOF"));
+        this.context = new Context(keyspace, new Propagation(), new ServerControl() {
+            @Override
+            public String rewriteAppendOnlyFile() {
+                return aof.rewriteInBackground(keyspace, "BGREWRITEAOF");
+            }
+
+            @Override
+            public String save() {
+                return snapshot == null ? ServerControl.NONE.save() : snapshot.save(keyspace);
+            }
+        });
         this.events = events;
         // 만료 삭제는 DEL로 전파 - 명령 중이면 그 명령과 묶고, 주기적 만료면 단독
         keyspace.setExpiredListener(key -> {

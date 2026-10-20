@@ -5,6 +5,7 @@ import glassredis.observe.DashboardServer;
 import glassredis.observe.EventHub;
 import glassredis.persistence.AofLoader;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.Snapshot;
 import glassredis.server.RedisServer;
 
 import java.io.IOException;
@@ -31,6 +32,7 @@ public final class Main {
         AppendOnlyLog.FsyncPolicy fsync = defaults.fsync();
         int rewritePercentage = defaults.rewritePercentage();
         long rewriteMinSize = defaults.rewriteMinSize();
+        String dbFilename = Snapshot.Config.defaults(dir).filename();
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -45,6 +47,7 @@ public final class Main {
                         fsync = AppendOnlyLog.FsyncPolicy.parse(requireValue(args, ++i, "--appendfsync"));
                 case "--auto-aof-rewrite-percentage" ->
                         rewritePercentage = Integer.parseInt(requireValue(args, ++i, "--auto-aof-rewrite-percentage"));
+                case "--dbfilename" -> dbFilename = requireValue(args, ++i, "--dbfilename");
                 case "--auto-aof-rewrite-min-size" ->
                         rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
                 case "--help", "-h" -> {
@@ -66,7 +69,8 @@ public final class Main {
 
         AppendOnlyLog aof = new AppendOnlyLog(
                 new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize), events);
-        RedisServer server = new RedisServer(bind, port, registry, events, aof);
+        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename));
+        RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
         server.start();
         reportAof(aof);
 
@@ -160,7 +164,8 @@ public final class Main {
                   --dashboard-port <번호>  대시보드 포트 (기본 8080)
                   --no-dashboard         대시보드를 띄우지 않는다
                   --appendonly yes|no    AOF 기록·복구 (기본 no)
-                  --dir <폴더>           AOF 폴더(appendonlydir)를 둘 곳 (기본 현재 폴더)
+                  --dir <폴더>           AOF 폴더(appendonlydir)와 RDB 파일을 둘 곳 (기본 현재 폴더)
+                  --dbfilename <이름>    RDB 파일 이름 (기본 dump.rdb)
                   --appendfsync <정책>   always | everysec | no (기본 everysec)
                   --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
                   --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)

@@ -29,6 +29,7 @@ import glassredis.command.impl.PopCommand;
 import glassredis.command.impl.PushCommand;
 import glassredis.command.impl.QuitCommand;
 import glassredis.command.impl.SaddCommand;
+import glassredis.command.impl.SaveCommand;
 import glassredis.command.impl.ScardCommand;
 import glassredis.command.impl.SetAlgebraCommand;
 import glassredis.command.impl.SetCommand;
@@ -89,6 +90,7 @@ public final class CommandRegistry {
         registry.register(new PersistCommand());
         registry.register(new TypeCommand());
         registry.register(new BgrewriteaofCommand());
+        registry.register(new SaveCommand());
         registry.register(new ObjectCommand());
 
         registry.register(PushCommand.left());

@@ -4,8 +4,21 @@ package glassredis.command;
 public interface ServerControl {
 
     /** 소켓 없는 테스트용 - 지원 안 함 */
-    ServerControl NONE = () -> "persistence is not available";
+    ServerControl NONE = new ServerControl() {
+        @Override
+        public String rewriteAppendOnlyFile() {
+            return "persistence is not available";
+        }
+
+        @Override
+        public String save() {
+            return "persistence is not available";
+        }
+    };
 
     /** BGREWRITEAOF - 실패 사유, 시작했으면 null */
     String rewriteAppendOnlyFile();
+
+    /** SAVE - 실패 사유, 저장했으면 null */
+    String save();
 }

@@ -16,6 +16,7 @@ hs_err_pid*
 
 # 런타임 산출물
 *.aof
+*.rdb
 appendonlydir/
 *.snapshot
 data/
