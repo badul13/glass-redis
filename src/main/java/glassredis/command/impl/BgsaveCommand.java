@@ -20,6 +20,11 @@ public final class BgsaveCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return -1;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         boolean schedule = false;
         if (!args.isEmpty()) {

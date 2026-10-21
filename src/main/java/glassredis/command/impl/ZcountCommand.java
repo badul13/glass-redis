@@ -21,6 +21,11 @@ public final class ZcountCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 4;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != 3) {
             return Errors.wrongNumberOfArguments(name());

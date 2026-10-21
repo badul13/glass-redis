@@ -42,6 +42,11 @@ public final class PopCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return -2;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }

@@ -24,6 +24,11 @@ public final class AppendCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 3;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }

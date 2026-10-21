@@ -153,6 +153,11 @@ class CommandLoopTest {
         }
 
         @Override
+        public int arity() {
+            return -1;
+        }
+
+        @Override
         public RespValue execute(Context ctx, List<byte[]> args) {
             return body.apply(ctx);
         }

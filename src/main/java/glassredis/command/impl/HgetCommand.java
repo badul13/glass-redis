@@ -39,6 +39,11 @@ public final class HgetCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return multiple ? -3 : 3;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (multiple ? args.size() < 2 : args.size() != 2) {
             return Errors.wrongNumberOfArguments(name);

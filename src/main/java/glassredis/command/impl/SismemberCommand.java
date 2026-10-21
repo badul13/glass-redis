@@ -19,6 +19,11 @@ public final class SismemberCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 3;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != 2) {
             return Errors.wrongNumberOfArguments(name());

@@ -16,6 +16,11 @@ public final class EchoCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 2;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != 1) {
             return Errors.wrongNumberOfArguments(name());

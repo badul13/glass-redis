@@ -23,6 +23,11 @@ public final class ObjectCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return -2;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());

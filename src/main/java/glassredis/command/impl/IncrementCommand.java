@@ -51,6 +51,11 @@ public final class IncrementCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return takesAmount ? 3 : 2;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }

@@ -57,6 +57,11 @@ public final class SetAlgebraCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return singleKey ? 2 : -2;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (singleKey ? args.size() != 1 : args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name);

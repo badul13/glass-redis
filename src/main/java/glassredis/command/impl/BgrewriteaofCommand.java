@@ -19,6 +19,11 @@ public final class BgrewriteaofCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 1;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (!args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());

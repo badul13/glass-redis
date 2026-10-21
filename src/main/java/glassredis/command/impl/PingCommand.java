@@ -16,6 +16,11 @@ public final class PingCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return -1;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         return switch (args.size()) {
             case 0 -> RespValue.PONG;

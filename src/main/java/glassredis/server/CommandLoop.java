@@ -243,8 +243,14 @@ final class CommandLoop implements AutoCloseable {
         long startNanos = events.enabled() ? System.nanoTime() : 0;
         List<byte[]> args = argv.subList(1, argv.size());
 
-        // 저장 실패 중이면 쓰기 명령·PING 거부 (processCommand)
-        RespValue reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
+        // processCommand 순서 - 인자 수 검사 → 저장 실패 중이면 쓰기 명령·PING 거부
+        int arity = command.arity();
+        RespValue reply;
+        if ((arity > 0 && argv.size() != arity) || argv.size() < -arity) {
+            reply = Errors.wrongNumberOfArguments(command.name());
+        } else {
+            reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
+        }
         if (reply == null) {
             context.propagation().begin(argv);
             try {

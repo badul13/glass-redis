@@ -149,6 +149,8 @@ class RdbRestartTest {
             } while (ping.equals("+PONG"));
             assertTrue(ping.startsWith("-MISCONF Redis is configured to save RDB snapshots"), ping);
             assertTrue(client.command("SET", "k", "w").startsWith("-MISCONF"));
+            assertEquals("-ERR wrong number of arguments for 'set' command", client.command("SET", "k"),
+                    "인자 수 검사가 MISCONF 보다 먼저");
             assertEquals("$1", client.command("GET", "k"));
             assertEquals("v", client.readLine());
 

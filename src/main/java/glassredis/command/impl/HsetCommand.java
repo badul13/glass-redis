@@ -39,6 +39,11 @@ public final class HsetCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return -4;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }

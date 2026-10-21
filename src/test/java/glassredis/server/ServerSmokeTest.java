@@ -223,6 +223,11 @@ class ServerSmokeTest {
             }
 
             @Override
+            public int arity() {
+                return -1;
+            }
+
+            @Override
             public RespValue execute(Context ctx, List<byte[]> args) {
                 throw new StackOverflowError("테스트에서 일부러 던짐");
             }

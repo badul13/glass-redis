@@ -18,6 +18,11 @@ public final class PersistCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 2;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }

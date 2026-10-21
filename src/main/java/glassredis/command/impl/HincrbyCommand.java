@@ -25,6 +25,11 @@ public final class HincrbyCommand implements Command {
     }
 
     @Override
+    public int arity() {
+        return 4;
+    }
+
+    @Override
     public boolean writes() {
         return true;
     }
