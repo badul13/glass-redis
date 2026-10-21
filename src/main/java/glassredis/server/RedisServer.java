@@ -146,8 +146,18 @@ public final class RedisServer implements AutoCloseable {
         stopped.await();
     }
 
+    /** 정상 종료 - close() 에 더해 save 규칙 있으면 마지막 RDB 저장 (SIGTERM·SIGINT) */
+    public void shutdown() {
+        stop(true);
+    }
+
+    /** 저장 없이 멈춤 - 프로세스가 죽은 것과 같음 (AOF 버퍼는 마무리) */
     @Override
     public void close() {
+        stop(false);
+    }
+
+    private void stop(boolean save) {
         running = false;
         try {
             if (serverSocket != null) {
@@ -162,7 +172,11 @@ public final class RedisServer implements AutoCloseable {
             connectionExecutor.shutdownNow();
         }
         if (commandLoop != null) {
-            commandLoop.close();
+            if (save) {
+                commandLoop.shutdown();
+            } else {
+                commandLoop.close();
+            }
         }
     }
 

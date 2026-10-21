@@ -17,6 +17,11 @@ public final class DelCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());

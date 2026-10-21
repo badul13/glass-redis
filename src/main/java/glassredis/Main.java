@@ -11,6 +11,7 @@ import glassredis.server.RedisServer;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 
 public final class Main {
@@ -33,7 +34,10 @@ public final class Main {
         AppendOnlyLog.FsyncPolicy fsync = defaults.fsync();
         int rewritePercentage = defaults.rewritePercentage();
         long rewriteMinSize = defaults.rewriteMinSize();
-        String dbFilename = Snapshot.Config.defaults(dir).filename();
+        Snapshot.Config rdbDefaults = Snapshot.Config.defaults(dir);
+        String dbFilename = rdbDefaults.filename();
+        List<Snapshot.SaveParam> saveParams = rdbDefaults.saveParams();
+        boolean stopWritesOnBgsaveError = rdbDefaults.stopWritesOnBgsaveError();
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -49,6 +53,9 @@ public final class Main {
                 case "--auto-aof-rewrite-percentage" ->
                         rewritePercentage = Integer.parseInt(requireValue(args, ++i, "--auto-aof-rewrite-percentage"));
                 case "--dbfilename" -> dbFilename = requireValue(args, ++i, "--dbfilename");
+                case "--save" -> saveParams = Snapshot.Config.parseSave(requireValue(args, ++i, "--save"));
+                case "--stop-writes-on-bgsave-error" -> stopWritesOnBgsaveError =
+                        yesNo(requireValue(args, ++i, "--stop-writes-on-bgsave-error"), "--stop-writes-on-bgsave-error");
                 case "--auto-aof-rewrite-min-size" ->
                         rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
                 case "--help", "-h" -> {
@@ -70,7 +77,7 @@ public final class Main {
 
         AppendOnlyLog aof = new AppendOnlyLog(
                 new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize), events);
-        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename));
+        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError));
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
         server.start();
         reportAof(aof);
@@ -87,7 +94,7 @@ public final class Main {
             if (dashboardServer != null) {
                 dashboardServer.close();
             }
-            server.close();
+            server.shutdown();
         }));
         server.awaitStop();
     }
@@ -119,7 +126,10 @@ public final class Main {
         } else {
             System.out.println("[glass-redis] RDB 파일이 없어 빈 데이터로 시작합니다");
         }
-        System.out.printf("[glass-redis] RDB: %s%n", snapshot.file().toAbsolutePath().normalize());
+        StringBuilder save = new StringBuilder();
+        snapshot.config().saveParams().forEach(p -> save.append(save.isEmpty() ? "" : " ")
+                .append(p.seconds()).append(' ').append(p.changes()));
+        System.out.printf("[glass-redis] RDB: %s (save \"%s\")%n", snapshot.file().toAbsolutePath().normalize(), save);
     }
 
     /** 기동 시 복구 결과 - Redis 로그처럼 */
@@ -183,6 +193,9 @@ public final class Main {
                   --appendonly yes|no    AOF 기록·복구 (기본 no)
                   --dir <폴더>           AOF 폴더(appendonlydir)와 RDB 파일을 둘 곳 (기본 현재 폴더)
                   --dbfilename <이름>    RDB 파일 이름 (기본 dump.rdb) - AOF 꺼져 있으면 기동 시 여기서 복구
+                  --save "<초> <횟수> ..."  이 시간 안에 이만큼 바뀌면 BGSAVE (기본 "3600 1 300 100 60 10000", ""는 끔)
+                                         규칙이 있으면 종료(Ctrl+C) 때도 저장
+                  --stop-writes-on-bgsave-error yes|no  BGSAVE 실패 시 쓰기 명령 거부 (기본 yes)
                   --appendfsync <정책>   always | everysec | no (기본 everysec)
                   --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
                   --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)

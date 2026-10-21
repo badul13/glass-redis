@@ -2,6 +2,7 @@ package glassredis.command;
 
 import glassredis.command.impl.AppendCommand;
 import glassredis.command.impl.BgrewriteaofCommand;
+import glassredis.command.impl.BgsaveCommand;
 import glassredis.command.impl.DelCommand;
 import glassredis.command.impl.EchoCommand;
 import glassredis.command.impl.ExistsCommand;
@@ -15,6 +16,7 @@ import glassredis.command.impl.HincrbyCommand;
 import glassredis.command.impl.HlenCommand;
 import glassredis.command.impl.HsetCommand;
 import glassredis.command.impl.IncrementCommand;
+import glassredis.command.impl.LastsaveCommand;
 import glassredis.command.impl.LindexCommand;
 import glassredis.command.impl.LlenCommand;
 import glassredis.command.impl.LrangeCommand;
@@ -91,6 +93,8 @@ public final class CommandRegistry {
         registry.register(new TypeCommand());
         registry.register(new BgrewriteaofCommand());
         registry.register(new SaveCommand());
+        registry.register(new BgsaveCommand());
+        registry.register(new LastsaveCommand());
         registry.register(new ObjectCommand());
 
         registry.register(PushCommand.left());

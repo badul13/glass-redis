@@ -18,6 +18,11 @@ public final class MsetCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.isEmpty() || args.size() % 2 != 0) {
             return Errors.wrongNumberOfArguments(name());

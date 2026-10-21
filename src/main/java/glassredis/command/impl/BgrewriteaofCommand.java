@@ -9,12 +9,9 @@ import java.util.List;
 
 /**
  * BGREWRITEAOF - AOF를 지금 데이터 기준 최소 명령으로 다시 쓰기 시작, 완료는 기다리지 않음
- * 진행 중이면 에러
+ * 진행 중이면 에러, BGSAVE 중이면 끝난 뒤로 예약
  */
 public final class BgrewriteaofCommand implements Command {
-
-    private static final RespValue STARTED =
-            new RespValue.SimpleString("Background append only file rewriting started");
 
     @Override
     public String name() {
@@ -26,7 +23,6 @@ public final class BgrewriteaofCommand implements Command {
         if (!args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());
         }
-        String failure = ctx.server().rewriteAppendOnlyFile();
-        return failure == null ? STARTED : new RespValue.Err("ERR " + failure);
+        return ctx.server().bgrewriteaof();
     }
 }

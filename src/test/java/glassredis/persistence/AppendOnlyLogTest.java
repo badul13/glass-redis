@@ -123,7 +123,7 @@ class AppendOnlyLogTest {
         aof.flush();
 
         while (aof.rewriting()) {
-            aof.cron(keyspace);
+            aof.checkRewriteDone();
             Thread.sleep(10);
         }
         assertEquals("file appendonly.aof.2.base.aof seq 2 type b\nfile appendonly.aof.2.incr.aof seq 2 type i\n",
@@ -145,14 +145,14 @@ class AppendOnlyLogTest {
         Keyspace keyspace = new Keyspace();
         AppendOnlyLog aof = open(keyspace, 100, 200);
         keyspace.put(Key.of("counter"), Entry.of("1".getBytes(StandardCharsets.UTF_8)));
-        aof.cron(keyspace);
+        aof.autoRewrite(keyspace);
         assertFalse(aof.rewriting(), "200바이트 이하라 안 함");
 
         for (int i = 0; i < 20; i++) {
             aof.feedAll(List.of(argv("INCR", "counter")));
         }
         aof.flush();
-        aof.cron(keyspace);
+        aof.autoRewrite(keyspace);
         assertTrue(aof.rewriting());
     }
 }

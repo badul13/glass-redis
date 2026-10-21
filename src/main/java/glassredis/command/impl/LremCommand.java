@@ -24,6 +24,11 @@ public final class LremCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != 3) {
             return Errors.wrongNumberOfArguments(name());

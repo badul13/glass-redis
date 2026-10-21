@@ -40,6 +40,11 @@ public final class Propagation {
         dirty += count;
     }
 
+    /** 이번 명령의 변경 횟수 - server.dirty 누적용 */
+    public long dirtyCount() {
+        return dirty;
+    }
+
     /** 이름 포함 전체 인자 - 받은 명령 대신 이 모양으로 전파 */
     public void rewrite(List<byte[]> argv) {
         rewritten = argv;

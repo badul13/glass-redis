@@ -81,6 +81,87 @@ class RdbRestartTest {
     }
 
     @Test
+    @DisplayName("BGSAVE 후 재시작 - 저장은 백그라운드, 응답은 바로")
+    void bgsaveThenRestart() throws Exception {
+        RedisServer first = start(false);
+        try (Client client = new Client(first.port())) {
+            assertEquals("+OK", client.command("SET", "greeting", "hello"));
+            assertEquals("+Background saving started", client.command("BGSAVE"));
+            assertEquals("-ERR syntax error", client.command("BGSAVE", "NOW"));
+            while (!Files.exists(dir.resolve("dump.rdb"))) {
+                Thread.sleep(10);
+            }
+        } finally {
+            first.close();
+        }
+
+        RedisServer second = start(false);
+        try (Client client = new Client(second.port())) {
+            assertEquals("$5", client.command("GET", "greeting"));
+            assertEquals("hello", client.readLine());
+        } finally {
+            second.close();
+        }
+    }
+
+    @Test
+    @DisplayName("정상 종료(shutdown) - save 규칙 있으면 마지막 저장, close 는 저장 안 함")
+    void shutdownSaves() throws Exception {
+        RedisServer first = start(false);
+        try (Client client = new Client(first.port())) {
+            assertEquals("+OK", client.command("SET", "kept", "yes"));
+        } finally {
+            first.shutdown();
+        }
+
+        RedisServer second = start(false);
+        try (Client client = new Client(second.port())) {
+            assertEquals("$3", client.command("GET", "kept"));
+            assertEquals("yes", client.readLine());
+            assertEquals("+OK", client.command("SET", "lost", "yes"));
+        } finally {
+            second.close();
+        }
+
+        RedisServer third = start(false);
+        try (Client client = new Client(third.port())) {
+            assertEquals("$-1", client.command("GET", "lost"));
+        } finally {
+            third.close();
+        }
+    }
+
+    @Test
+    @DisplayName("BGSAVE 실패 - 쓰기 명령과 PING 은 MISCONF, 읽기는 그대로, SAVE 성공하면 풀림")
+    void misconfAfterFailedBgsave() throws Exception {
+        RedisServer server = start(false);
+        try (Client client = new Client(server.port())) {
+            assertEquals("+OK", client.command("SET", "k", "v"));
+            // 같은 이름의 비어 있지 않은 폴더 - 이름 바꾸기 실패
+            Path blocker = dir.resolve("dump.rdb").resolve("inside");
+            Files.createDirectories(blocker);
+            assertEquals("+Background saving started", client.command("BGSAVE"));
+
+            String ping;
+            do {
+                Thread.sleep(20);
+                ping = client.command("PING");
+            } while (ping.equals("+PONG"));
+            assertTrue(ping.startsWith("-MISCONF Redis is configured to save RDB snapshots"), ping);
+            assertTrue(client.command("SET", "k", "w").startsWith("-MISCONF"));
+            assertEquals("$1", client.command("GET", "k"));
+            assertEquals("v", client.readLine());
+
+            Files.delete(blocker);
+            Files.delete(blocker.getParent());
+            assertEquals("+OK", client.command("SAVE"));
+            assertEquals("+PONG", client.command("PING"));
+        } finally {
+            server.close();
+        }
+    }
+
+    @Test
     @DisplayName("AOF 켜져 있으면 dump.rdb 는 안 읽음 - loadDataFromDisk")
     void aofWins() throws Exception {
         RedisServer first = start(false);

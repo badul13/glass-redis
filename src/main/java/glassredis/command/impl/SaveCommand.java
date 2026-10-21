@@ -13,8 +13,6 @@ import java.util.List;
  */
 public final class SaveCommand implements Command {
 
-    private static final RespValue FAILED = new RespValue.Err("ERR");
-
     @Override
     public String name() {
         return "SAVE";
@@ -25,11 +23,6 @@ public final class SaveCommand implements Command {
         if (!args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());
         }
-        String failure = ctx.server().save();
-        if (failure != null) {
-            System.err.println("[glass-redis] RDB 저장 실패: " + failure);
-            return FAILED;
-        }
-        return RespValue.OK;
+        return ctx.server().save();
     }
 }

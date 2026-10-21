@@ -51,6 +51,11 @@ public final class IncrementCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() != (takesAmount ? 2 : 1)) {
             return Errors.wrongNumberOfArguments(name);

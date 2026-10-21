@@ -20,6 +20,11 @@ public final class SaddCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() < 2) {
             return Errors.wrongNumberOfArguments(name());

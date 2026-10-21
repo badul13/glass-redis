@@ -39,6 +39,11 @@ public final class HsetCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.size() < 3 || args.size() % 2 == 0) {
             return Errors.wrongNumberOfArguments(name());

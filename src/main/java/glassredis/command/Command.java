@@ -13,6 +13,11 @@ public interface Command {
     /** args - 명령 이름 제외 */
     RespValue execute(Context ctx, List<byte[]> args);
 
+    /** 데이터를 바꿀 수 있는 명령 - write 플래그, 저장 실패 시 거부 대상 (MISCONF) */
+    default boolean writes() {
+        return false;
+    }
+
     /** 응답 후 커넥션 종료 여부 - QUIT만 true */
     default boolean closesConnection() {
         return false;

@@ -42,6 +42,11 @@ public final class PopCommand implements Command {
     }
 
     @Override
+    public boolean writes() {
+        return true;
+    }
+
+    @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         if (args.isEmpty() || args.size() > 2) {
             return Errors.wrongNumberOfArguments(name);

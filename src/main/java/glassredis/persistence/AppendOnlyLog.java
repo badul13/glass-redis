@@ -111,6 +111,8 @@ public final class AppendOnlyLog implements AutoCloseable {
 
     private Rewrite rewrite;
     private int rewrites;
+    /** aof_rewrite_scheduled */
+    private boolean rewriteScheduled;
 
     private AofLoader.Result loadResult;
 
@@ -318,13 +320,18 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
     }
 
-    /**
-     * serverCron - 재작성 완료 확인(checkChildrenDone), 자동 재작성 조건 확인
-     */
-    public void cron(Keyspace keyspace) {
+    /** serverCron 의 checkChildrenDone - 재작성 끝났으면 새 base 로 교체 */
+    public void checkRewriteDone() {
         if (rewrite != null && rewrite.written().isDone()) {
             finishRewrite();
         }
+    }
+
+    /**
+     * serverCron - 자동 재작성 조건 확인
+     * 다른 백그라운드 작업 확인은 호출하는 쪽 몫 (hasActiveChildProcess)
+     */
+    public void autoRewrite(Keyspace keyspace) {
         if (config.enabled() && rewrite == null && config.rewritePercentage() > 0
                 && currentSize > config.rewriteMinSize()) {
             long base = rewriteBaseSize > 0 ? rewriteBaseSize : 1;
@@ -337,6 +344,15 @@ public final class AppendOnlyLog implements AutoCloseable {
 
     public boolean rewriting() {
         return rewrite != null;
+    }
+
+    /** BGSAVE 중 BGREWRITEAOF - 끝나면 시작 (aof_rewrite_scheduled) */
+    public void scheduleRewrite() {
+        rewriteScheduled = true;
+    }
+
+    public boolean rewriteScheduled() {
+        return rewriteScheduled;
     }
 
     /**
@@ -374,6 +390,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         }, rewriteThread);
         rewrite = new Rewrite(temp, written, start, currentSize);
         rewrites++;
+        rewriteScheduled = false;
         if (events.enabled()) {
             events.publish(new Event.AofRewriteStarted(trigger, keyspace.size(), currentSize, serializeNanos,
                     content.length, channelName));
