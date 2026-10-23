@@ -292,7 +292,7 @@ public final class Snapshot {
 
     private byte[] serialize(Keyspace keyspace) {
         Runtime runtime = Runtime.getRuntime();
-        return RdbWriter.write(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory());
+        return RdbWriter.write(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory(), false);
     }
 
     /** 임시 파일 → fsync → 이름 바꾸기, 실패 시 임시 파일 삭제 */

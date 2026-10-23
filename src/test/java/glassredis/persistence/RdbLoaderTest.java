@@ -125,7 +125,7 @@ class RdbLoaderTest {
         }
         run("SET", "big", "x".repeat(5000));
 
-        RdbLoader.Result result = load(RdbWriter.write(source, 1, 1));
+        RdbLoader.Result result = load(RdbWriter.write(source, 1, 1, false));
         assertEquals(RdbLoader.Status.OK, result.status(), result.error());
         assertEquals(source.size(), result.keys());
         source.forEach((key, entry) -> {
@@ -148,7 +148,7 @@ class RdbLoaderTest {
         run("SET", "gone", "1", "PXAT", Long.toString(NOW + 10));
         run("SET", "edge", "1", "PXAT", Long.toString(NOW + 100));
         run("SET", "kept", "1", "PXAT", Long.toString(NOW + 1000));
-        byte[] rdb = RdbWriter.write(source, 1, 1);
+        byte[] rdb = RdbWriter.write(source, 1, 1, false);
         clock.advanceMillis(100);
 
         RdbLoader.Result result = load(rdb);
@@ -162,7 +162,7 @@ class RdbLoaderTest {
     @DisplayName("체크섬 - 틀리면 실패, 0 이면 검사 생략")
     void checksum() {
         run("SET", "k", "v");
-        byte[] rdb = RdbWriter.write(source, 1, 1);
+        byte[] rdb = RdbWriter.write(source, 1, 1, false);
         rdb[rdb.length - 1] ^= 1;
         RdbLoader.Result result = load(rdb);
         assertEquals(RdbLoader.Status.FAILED, result.status());
@@ -178,7 +178,7 @@ class RdbLoaderTest {
     @DisplayName("잘린 파일·모르는 버전·같은 키 두 번은 실패")
     void failures() {
         run("SET", "k", "v");
-        byte[] rdb = RdbWriter.write(source, 1, 1);
+        byte[] rdb = RdbWriter.write(source, 1, 1, false);
         byte[] cut = java.util.Arrays.copyOf(rdb, rdb.length - 12);
         assertEquals("Unexpected EOF reading RDB file", load(cut).error());
 

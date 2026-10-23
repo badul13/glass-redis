@@ -72,12 +72,17 @@ public final class AofManifest {
         return base == null && incr.isEmpty();
     }
 
-    /** 기존 base는 history로 - getNewBaseFileNameAndMarkPreAsHistory (base 형식은 AOF) */
-    public String newBase() {
+    /**
+     * 기존 base는 history로 - getNewBaseFileNameAndMarkPreAsHistory
+     *
+     * @param rdb aof-use-rdb-preamble - 확장자 .rdb, 아니면 .aof
+     */
+    public String newBase(boolean rdb) {
         if (base != null) {
             history.addFirst(base.withType('h'));
         }
-        base = new FileInfo(FILENAME + "." + (++currentBaseSeq) + ".base.aof", currentBaseSeq, 'b');
+        String suffix = rdb ? ".rdb" : ".aof";
+        base = new FileInfo(FILENAME + "." + (++currentBaseSeq) + ".base" + suffix, currentBaseSeq, 'b');
         return base.name();
     }
 

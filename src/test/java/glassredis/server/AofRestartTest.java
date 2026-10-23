@@ -29,8 +29,12 @@ class AofRestartTest {
     Path dir;
 
     private RedisServer start() throws IOException {
+        return start(false);
+    }
+
+    private RedisServer start(boolean rdbPreamble) throws IOException {
         AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, true, AppendOnlyLog.FsyncPolicy.EVERYSEC,
-                100, 64L << 20), EventBus.NONE);
+                100, 64L << 20, rdbPreamble), EventBus.NONE);
         RedisServer server = new RedisServer("127.0.0.1", 0, CommandRegistry.withBuiltins(), EventBus.NONE, aof);
         server.start();
         return server;
@@ -88,6 +92,92 @@ class AofRestartTest {
         try (Client client = new Client(second.port())) {
             assertEquals("$2", client.command("GET", "n"));
             assertEquals("30", client.readLine());
+        } finally {
+            second.close();
+        }
+    }
+
+    @Test
+    @DisplayName("preamble yes - BGREWRITEAOF 후 RDB base + 그 뒤 incr 명령으로 복구")
+    void rdbPreambleRestart() throws Exception {
+        RedisServer first = start(true);
+        Path aofDir = dir.resolve("appendonlydir");
+        try (Client client = new Client(first.port())) {
+            assertEquals("+OK", client.command("SET", "greeting", "hello"));
+            assertEquals(":1", client.command("EXPIRE", "greeting", "1000"));
+            assertEquals(":3", client.command("RPUSH", "list", "a", "b", "c"));
+            assertEquals(":2", client.command("SADD", "set", "1", "2"));
+            assertEquals(":2", client.command("HSET", "hash", "f1", "v1", "f2", "v2"));
+            assertEquals(":2", client.command("ZADD", "zset", "1", "a", "2.5", "b"));
+            assertEquals("+Background append only file rewriting started", client.command("BGREWRITEAOF"));
+            Path manifest = aofDir.resolve("appendonly.aof.manifest");
+            long deadline = System.nanoTime() + 5_000_000_000L;
+            while (!Files.readString(manifest).contains("appendonly.aof.2.base.rdb")) {
+                assertTrue(System.nanoTime() < deadline, "5초 안에 재작성 완료");
+                Thread.sleep(20);
+            }
+            assertEquals("+OK", client.command("SET", "after", "rewrite"));
+            assertEquals(":4", client.command("RPUSH", "list", "d"));
+        } finally {
+            first.close();
+        }
+        byte[] base = Files.readAllBytes(aofDir.resolve("appendonly.aof.2.base.rdb"));
+        assertEquals("REDIS0011", new String(base, 0, 9, StandardCharsets.US_ASCII));
+
+        RedisServer second = start(true);
+        try (Client client = new Client(second.port())) {
+            assertEquals("$5", client.command("GET", "greeting"));
+            assertEquals("hello", client.readLine());
+            String ttl = client.command("TTL", "greeting");
+            assertTrue(ttl.equals(":1000") || ttl.equals(":999"), "base 의 만료 시각 유지: " + ttl);
+            assertEquals(":4", client.command("LLEN", "list"));
+            assertEquals(":1", client.command("SISMEMBER", "set", "2"));
+            assertEquals("$2", client.command("HGET", "hash", "f2"));
+            assertEquals("v2", client.readLine());
+            assertEquals("$3", client.command("ZSCORE", "zset", "b"));
+            assertEquals("2.5", client.readLine());
+            assertEquals("$7", client.command("GET", "after"));
+            assertEquals("rewrite", client.readLine());
+        } finally {
+            second.close();
+        }
+    }
+
+    @Test
+    @DisplayName("RDB base 의 지난 만료 키 - 기동 시 실은 뒤 주기적 만료가 지우고 incr 에 DEL")
+    void expiredKeyInRdbBase() throws Exception {
+        RedisServer first = start(true);
+        Path aofDir = dir.resolve("appendonlydir");
+        try (Client client = new Client(first.port())) {
+            assertEquals("+OK", client.command("SET", "k", "v", "PX", "1500"));
+            assertEquals("+OK", client.command("SET", "p", "v"));
+            assertEquals("+Background append only file rewriting started", client.command("BGREWRITEAOF"));
+            Path manifest = aofDir.resolve("appendonly.aof.manifest");
+            long deadline = System.nanoTime() + 1_000_000_000L;
+            while (!Files.readString(manifest).contains("appendonly.aof.2.base.rdb")) {
+                assertTrue(System.nanoTime() < deadline, "만료 전에 재작성 완료");
+                Thread.sleep(10);
+            }
+        } finally {
+            first.close();
+        }
+        Path incr = aofDir.resolve("appendonly.aof.2.incr.aof");
+        assertEquals("", Files.readString(incr), "만료 전에 꺼서 DEL 없음");
+        Thread.sleep(1600);
+
+        RedisServer second = start(true);
+        try {
+            assertEquals(2, second.aofSnapshot().loadedKeys(), "지난 만료 키 k 도 실음");
+            long deadline = System.nanoTime() + 3_000_000_000L;
+            while (!Files.readString(incr).contains("DEL")) {
+                assertTrue(System.nanoTime() < deadline, "3초 안에 주기적 만료");
+                Thread.sleep(20);
+            }
+            assertEquals("*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n*2\r\n$3\r\nDEL\r\n$1\r\nk\r\n", Files.readString(incr));
+            try (Client client = new Client(second.port())) {
+                assertEquals(":0", client.command("EXISTS", "k"));
+                assertEquals(":1", client.command("EXISTS", "p"));
+            }
         } finally {
             second.close();
         }

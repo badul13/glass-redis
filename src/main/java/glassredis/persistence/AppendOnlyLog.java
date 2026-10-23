@@ -54,12 +54,14 @@ public final class AppendOnlyLog implements AutoCloseable {
      * @param dir 작업 폴더 (dir 설정) - AOF는 그 안 appendonlydir
      * @param rewritePercentage auto-aof-rewrite-percentage - 0이면 자동 재작성 끔
      * @param rewriteMinSize auto-aof-rewrite-min-size - 이보다 작으면 자동 재작성 안 함
+     * @param rdbPreamble aof-use-rdb-preamble - base 를 RDB 형식으로, 아니면 명령 나열
      */
-    public record Config(Path dir, boolean enabled, FsyncPolicy fsync, int rewritePercentage, long rewriteMinSize) {
+    public record Config(Path dir, boolean enabled, FsyncPolicy fsync, int rewritePercentage, long rewriteMinSize,
+                         boolean rdbPreamble) {
 
-        /** Redis 기본값 - appendonly no, everysec, 100%, 64MB */
+        /** Redis 기본값 - appendonly no, everysec, 100%, 64MB, preamble yes */
         public static Config defaults(Path dir) {
-            return new Config(dir, false, FsyncPolicy.EVERYSEC, 100, 64L * 1024 * 1024);
+            return new Config(dir, false, FsyncPolicy.EVERYSEC, 100, 64L * 1024 * 1024, true);
         }
     }
 
@@ -166,8 +168,8 @@ public final class AppendOnlyLog implements AutoCloseable {
     private void openOnStart(Keyspace keyspace) throws IOException {
         Files.createDirectories(aofDir);
         if (manifest.isEmpty()) {
-            String base = manifest.newBase();
-            writeBase(aofDir.resolve(base), AofRewriter.rewrite(keyspace));
+            String base = manifest.newBase(config.rdbPreamble());
+            writeBase(aofDir.resolve(base), baseContent(keyspace));
         }
         channelName = manifest.lastIncr();
         Path path = aofDir.resolve(channelName);
@@ -177,6 +179,16 @@ public final class AppendOnlyLog implements AutoCloseable {
         lastIncrSize = channel.size();
         lastIncrFsyncOffset = lastIncrSize;
         syncedOffset.set(lastIncrSize);
+    }
+
+    /** rewriteAppendOnlyFile 의 본문 - preamble 이면 RDB (aof-base 1), 아니면 명령 나열 */
+    private byte[] baseContent(Keyspace keyspace) {
+        if (!config.rdbPreamble()) {
+            return AofRewriter.rewrite(keyspace);
+        }
+        Runtime runtime = Runtime.getRuntime();
+        return RdbWriter.write(keyspace, System.currentTimeMillis() / 1000, runtime.totalMemory() - runtime.freeMemory(),
+                true);
     }
 
     /** rewriteAppendOnlyFile - 임시 이름으로 쓰고 fsync 후 교체 */
@@ -376,7 +388,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
 
         long start = System.nanoTime();
-        byte[] content = AofRewriter.rewrite(keyspace);
+        byte[] content = baseContent(keyspace);
         long serializeNanos = System.nanoTime() - start;
 
         Path temp = config.dir().resolve("temp-rewriteaof-bg-" + ProcessHandle.current().pid() + ".aof");
@@ -451,7 +463,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
 
         AofManifest next = manifest.copy();
-        String baseName = next.newBase();
+        String baseName = next.newBase(config.rdbPreamble());
         Path basePath = aofDir.resolve(baseName);
         long baseBytes;
         try {
@@ -514,7 +526,8 @@ public final class AppendOnlyLog implements AutoCloseable {
                 config.rewritePercentage(), config.rewriteMinSize(), rewrite != null,
                 Math.max(0, lastIncrSize - synced),
                 lastFsyncMillis == 0 ? -1 : System.currentTimeMillis() - lastFsyncMillis, status,
-                loadResult == null ? 0 : loadResult.commands(), loadResult == null ? 0 : loadResult.elapsedMillis(),
+                loadResult == null ? 0 : loadResult.rdbKeys(), loadResult == null ? 0 : loadResult.commands(),
+                loadResult == null ? 0 : loadResult.elapsedMillis(),
                 loadResult == null ? null : loadResult.truncatedFile(), rewrites);
     }
 

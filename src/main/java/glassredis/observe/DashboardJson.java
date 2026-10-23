@@ -89,6 +89,7 @@ final class DashboardJson {
         Json.field(out, "unsyncedBytes", snapshot.unsyncedBytes());
         Json.field(out, "lastFsyncAgo", snapshot.lastFsyncAgoMillis());
         Json.field(out, "loadStatus", snapshot.loadStatus());
+        Json.field(out, "loadedKeys", snapshot.loadedKeys());
         Json.field(out, "loadedCommands", snapshot.loadedCommands());
         Json.field(out, "loadMillis", snapshot.loadMillis());
         Json.field(out, "truncatedFile", snapshot.truncatedFile());

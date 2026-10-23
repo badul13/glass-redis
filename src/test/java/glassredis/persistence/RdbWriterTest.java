@@ -38,7 +38,7 @@ class RdbWriterTest {
 
     /** Redis 파일과 같은 ctime·used-mem 으로 쓴 결과 */
     private byte[] writeLike(byte[] redis) {
-        return RdbWriter.write(keyspace, auxInteger(redis, "ctime"), auxInteger(redis, "used-mem"));
+        return RdbWriter.write(keyspace, auxInteger(redis, "ctime"), auxInteger(redis, "used-mem"), false);
     }
 
     private void assertSameAsRedis(String redisHex) {
@@ -89,7 +89,7 @@ class RdbWriterTest {
         for (int i = 0; i < 600; i++) {
             run("RPUSH", "q", "element-number-" + i);
         }
-        byte[] ours = RdbWriter.write(keyspace, 0x6ad73666L, 0x001160e8L);
+        byte[] ours = RdbWriter.write(keyspace, 0x6ad73666L, 0x001160e8L, false);
         assertEquals(3174, ours.length);
         assertEquals("01c9da2537667a95ba6414d737a507e718fa360d4ee92ee324eff14457c7bf56", sha256(ours));
     }
@@ -117,7 +117,7 @@ class RdbWriterTest {
         for (int i = 0; i < 200; i++) {
             run("ZADD", "zs", i + ".25", "m" + i);
         }
-        byte[] ours = RdbWriter.write(keyspace, 0x6ad73666L, 0x001178f0L);
+        byte[] ours = RdbWriter.write(keyspace, 0x6ad73666L, 0x001178f0L, false);
         assertEquals(2589, ours.length);
         assertEquals("7b60dcff8b4299f97b955ab299c2c0f6f468e4128d85e535b873a11e0a1027a1", sha256(ours));
     }
@@ -130,9 +130,26 @@ class RdbWriterTest {
     }
 
     @Test
+    @DisplayName("AOF base (aof-use-rdb-preamble yes) - 같은 RDB 에 aof-base 만 1, 빈 데이터도 RDB")
+    void aofBase() {
+        // appendonly yes 로 처음 켰을 때의 appendonly.aof.1.base.rdb
+        String empty = "524544495330303131fa0972656469732d76657205372e322e34fa0a72656469732d62697473c040fa056374696d65c265f3da6afa08757365642d6d656dc2d8370d00fa08616f662d62617365c001ff835994112912e545";
+        byte[] redis = HexFormat.of().parseHex(empty);
+        assertEquals(empty, HexFormat.of().formatHex(
+                RdbWriter.write(keyspace, auxInteger(redis, "ctime"), auxInteger(redis, "used-mem"), true)));
+
+        // SET n8 123 뒤 BGREWRITEAOF 의 appendonly.aof.2.base.rdb
+        run("SET", "n8", "123");
+        String one = "524544495330303131fa0972656469732d76657205372e322e34fa0a72656469732d62697473c040fa056374696d65c267f3da6afa08757365642d6d656dc260300e00fa08616f662d62617365c001fe00fb010000026e38c07bffd8d090adc943658b";
+        redis = HexFormat.of().parseHex(one);
+        assertEquals(one, HexFormat.of().formatHex(
+                RdbWriter.write(keyspace, auxInteger(redis, "ctime"), auxInteger(redis, "used-mem"), true)));
+    }
+
+    @Test
     @DisplayName("빈 데이터 - SELECTDB 없이 보조 필드 뒤 바로 EOF")
     void empty() {
-        byte[] rdb = RdbWriter.write(keyspace, 1, 1);
+        byte[] rdb = RdbWriter.write(keyspace, 1, 1, false);
         String hex = HexFormat.of().formatHex(rdb);
         assertEquals("ff", hex.substring(hex.length() - 18, hex.length() - 16));
         assertEquals(-1, hex.indexOf("fe00fb"));

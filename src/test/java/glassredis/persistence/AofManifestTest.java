@@ -19,7 +19,7 @@ class AofManifestTest {
     @DisplayName("처음 기동 - base 1, incr 1 (redis:7 이 만드는 manifest 와 같은 글자)")
     void firstStart() {
         AofManifest manifest = new AofManifest();
-        manifest.newBase();
+        manifest.newBase(false);
         manifest.lastIncr();
         assertEquals("file appendonly.aof.1.base.aof seq 1 type b\n"
                 + "file appendonly.aof.1.incr.aof seq 1 type i\n", manifest.format());
@@ -29,10 +29,10 @@ class AofManifestTest {
     @DisplayName("재작성 - 새 incr 열고, 끝나면 새 base, 옛 base·incr 는 history 로")
     void rewriteCycle() {
         AofManifest manifest = new AofManifest();
-        manifest.newBase();
+        manifest.newBase(false);
         manifest.lastIncr();
         manifest.newIncr(); // 재작성 시작 - 이후 쓰기는 2번으로
-        manifest.newBase(); // 재작성 끝
+        manifest.newBase(false); // 재작성 끝
         manifest.markRewrittenIncrAsHistory(true);
         assertEquals("file appendonly.aof.2.base.aof seq 2 type b\n"
                 + "file appendonly.aof.1.incr.aof seq 1 type h\n"
@@ -46,9 +46,9 @@ class AofManifestTest {
     @DisplayName("AOF 꺼진 채 재작성 - incr 전부 history, base 만 남음")
     void rewriteWhileDisabled() {
         AofManifest manifest = new AofManifest();
-        manifest.newBase();
+        manifest.newBase(false);
         manifest.lastIncr();
-        manifest.newBase();
+        manifest.newBase(false);
         manifest.markRewrittenIncrAsHistory(false);
         assertTrue(manifest.incr().isEmpty());
         assertEquals(2, manifest.history().size());
@@ -58,7 +58,7 @@ class AofManifestTest {
     @DisplayName("읽기·쓰기 왕복 - seq 이어서 증가")
     void roundTrip(@TempDir Path dir) throws IOException {
         AofManifest manifest = new AofManifest();
-        manifest.newBase();
+        manifest.newBase(false);
         manifest.lastIncr();
         manifest.newIncr();
         manifest.persist(dir);
@@ -66,7 +66,7 @@ class AofManifestTest {
         AofManifest loaded = AofManifest.load(dir);
         assertEquals(manifest.format(), loaded.format());
         assertEquals("appendonly.aof.3.incr.aof", loaded.newIncr());
-        assertEquals("appendonly.aof.2.base.aof", loaded.newBase());
+        assertEquals("appendonly.aof.2.base.aof", loaded.newBase(false));
         assertTrue(Files.notExists(dir.resolve("temp-" + AofManifest.MANIFEST_NAME)), "임시 파일은 이름 바꾸기로 사라짐");
     }
 

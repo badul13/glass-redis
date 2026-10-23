@@ -33,7 +33,7 @@ class RdbRestartTest {
 
     private RedisServer start(boolean appendOnly) throws IOException {
         AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, appendOnly,
-                AppendOnlyLog.FsyncPolicy.EVERYSEC, 100, 64L << 20), EventBus.NONE);
+                AppendOnlyLog.FsyncPolicy.EVERYSEC, 100, 64L << 20, false), EventBus.NONE);
         RedisServer server = new RedisServer("127.0.0.1", 0, CommandRegistry.withBuiltins(), EventBus.NONE, aof,
                 new Snapshot(Snapshot.Config.defaults(dir)));
         server.start();

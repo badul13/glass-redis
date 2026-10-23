@@ -43,7 +43,7 @@ class PersistenceTest {
         Keyspace keyspace = new Keyspace();
         keyspace.put(Key.of("k"), Entry.of("v".getBytes(StandardCharsets.UTF_8)));
         AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, true, AppendOnlyLog.FsyncPolicy.EVERYSEC,
-                100, 64L << 20), EventBus.NONE);
+                100, 64L << 20, false), EventBus.NONE);
         aof.start(keyspace, CommandRegistry.withBuiltins());
         persistence = new Persistence(keyspace, aof, new Snapshot(Snapshot.Config.defaults(dir)));
         return persistence;

@@ -34,6 +34,7 @@ public final class Main {
         AppendOnlyLog.FsyncPolicy fsync = defaults.fsync();
         int rewritePercentage = defaults.rewritePercentage();
         long rewriteMinSize = defaults.rewriteMinSize();
+        boolean rdbPreamble = defaults.rdbPreamble();
         Snapshot.Config rdbDefaults = Snapshot.Config.defaults(dir);
         String dbFilename = rdbDefaults.filename();
         List<Snapshot.SaveParam> saveParams = rdbDefaults.saveParams();
@@ -58,6 +59,8 @@ public final class Main {
                         yesNo(requireValue(args, ++i, "--stop-writes-on-bgsave-error"), "--stop-writes-on-bgsave-error");
                 case "--auto-aof-rewrite-min-size" ->
                         rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
+                case "--aof-use-rdb-preamble" -> rdbPreamble =
+                        yesNo(requireValue(args, ++i, "--aof-use-rdb-preamble"), "--aof-use-rdb-preamble");
                 case "--help", "-h" -> {
                     printUsage();
                     return;
@@ -76,7 +79,8 @@ public final class Main {
         EventHub events = new EventHub();
 
         AppendOnlyLog aof = new AppendOnlyLog(
-                new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize), events);
+                new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize, rdbPreamble),
+                events);
         Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError));
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
         server.start();
@@ -139,8 +143,9 @@ public final class Main {
         }
         AofLoader.Result loaded = aof.loadResult();
         switch (loaded.status()) {
-            case OK, TRUNCATED -> System.out.printf("[glass-redis] AOF 에서 명령 %d개를 다시 실행해 복구했습니다 (%d바이트, %dms)%s%n",
-                    loaded.commands(), loaded.bytes(), loaded.elapsedMillis(),
+            case OK, TRUNCATED -> System.out.printf(
+                    "[glass-redis] AOF 에서 복구했습니다 - RDB base 키 %d개, 명령 %d개 재실행 (%d바이트, %dms)%s%n",
+                    loaded.rdbKeys(), loaded.commands(), loaded.bytes(), loaded.elapsedMillis(),
                     loaded.truncatedFile() == null ? "" : " - " + loaded.truncatedFile() + " 끝부분 잘라냄");
             case EMPTY, NOT_EXIST -> System.out.println("[glass-redis] AOF 가 비어 있어 빈 데이터로 시작합니다");
             case FAILED -> {
@@ -199,6 +204,7 @@ public final class Main {
                   --appendfsync <정책>   always | everysec | no (기본 everysec)
                   --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
                   --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)
+                  --aof-use-rdb-preamble yes|no  재작성 base 를 RDB 형식으로 (기본 yes, no 면 명령 나열)
                   --help, -h             이 도움말
                 """);
     }

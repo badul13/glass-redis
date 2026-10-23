@@ -18,6 +18,7 @@ import java.util.Locale;
 
 /**
  * 기동 시 복구 - base, incr 순으로 명령 재실행 (loadAppendOnlyFiles)
+ * "REDIS" 로 시작하는 파일 - RDB 부분을 먼저 읽고 그 뒤를 명령으로 (aof-use-rdb-preamble yes 의 base)
  * 응답은 버림, 로딩 중에는 만료 판단 중지
  * 명령 중간에서 끝난 파일 - 마지막 완전한 명령 뒤에서 잘라냄, 마지막 파일만 허용 (aof-load-truncated yes)
  * EXEC 없이 끝난 MULTI - MULTI 앞까지 되돌림
@@ -29,10 +30,11 @@ public final class AofLoader {
 
     /**
      * @param commands 실행한 명령 수 - MULTI·EXEC·SELECT 제외
+     * @param rdbKeys RDB 형식 base 에서 넣은 키 수
      * @param truncatedFile 잘라낸 파일 이름 - 없으면 null
      * @param error FAILED 사유 - 아니면 null
      */
-    public record Result(Status status, long commands, long bytes, String truncatedFile, long baseBytes,
+    public record Result(Status status, long commands, long rdbKeys, long bytes, String truncatedFile, long baseBytes,
                          long elapsedMillis, String error) {
     }
 
@@ -41,6 +43,7 @@ public final class AofLoader {
     private final Context context;
 
     private long commands;
+    private long rdbKeys;
     private String truncatedFile;
     /** FAILED 사유 */
     private String failure;
@@ -116,7 +119,16 @@ public final class AofLoader {
             return Status.EMPTY;
         }
         Reader in = new Reader(data);
-        long validUpTo = 0;
+        if (isRdb(data)) {
+            RdbLoader.Preamble preamble = RdbLoader.loadAofPreamble(data, context.keyspace());
+            if (preamble.result().status() != RdbLoader.Status.OK) {
+                // 잘린 RDB 도 잘라내기 없이 실패 - Error reading the RDB base file
+                return fail(path, "RDB 부분 읽기 실패 - " + preamble.result().error());
+            }
+            rdbKeys += preamble.result().keys();
+            in.pos = preamble.end();
+        }
+        long validUpTo = in.pos;
         long validBeforeMulti = 0;
         List<List<byte[]>> queued = null;
 
@@ -196,6 +208,11 @@ public final class AofLoader {
         return Status.OK;
     }
 
+    /** 서명 5바이트 "REDIS" - RDB 형식 */
+    private static boolean isRdb(byte[] data) {
+        return data.length >= 5 && new String(data, 0, 5, StandardCharsets.US_ASCII).equals("REDIS");
+    }
+
     private void execute(List<byte[]> argv) {
         Command command = registry.find(new String(argv.get(0), StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT));
         context.propagation().begin(argv);
@@ -222,7 +239,8 @@ public final class AofLoader {
     }
 
     private Result result(Status status, long bytes, long baseBytes, long start, String error) {
-        return new Result(status, commands, bytes, truncatedFile, baseBytes, System.currentTimeMillis() - start, error);
+        return new Result(status, commands, rdbKeys, bytes, truncatedFile, baseBytes,
+                System.currentTimeMillis() - start, error);
     }
 
     /** fgets·fread 흉내 - 모자라면 null */

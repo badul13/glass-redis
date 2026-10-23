@@ -5,9 +5,14 @@ import type { AofEvent, AofFile, AofSnapshot } from '../types'
 
 const FILE_LABELS = { b: 'base', h: '지울 파일', i: 'incr' } as const
 
-/** appendonly.aof.2.incr.aof → 2.incr */
+/** appendonly.aof.2.incr.aof → 2.incr, appendonly.aof.2.base.rdb → 2.base */
 function shortName(name: string): string {
-  return name.replace(/^appendonly\.aof\./, '').replace(/\.aof$/, '')
+  return name.replace(/^appendonly\.aof\./, '').replace(/\.(aof|rdb)$/, '')
+}
+
+/** 파일 형식 - aof-use-rdb-preamble yes 의 base 는 RDB */
+function fileFormat(name: string): string {
+  return name.endsWith('.rdb') ? 'RDB' : 'AOF'
 }
 
 /**
@@ -93,7 +98,9 @@ function FileBar({ file, share, unsynced }: { file: AofFile; share: number; unsy
         <i className="unsynced" style={{ width: unsyncedShare * 100 + '%' }} />
       </div>
       <div className="label">
-        <span className="kind">{FILE_LABELS[file.type]}</span>
+        <span className="kind">
+          {FILE_LABELS[file.type]} · {fileFormat(file.name)}
+        </span>
         <span className="name">{shortName(file.name)}</span>
         <span className="size">{file.bytes < 0 ? '?' : bytes(file.bytes)}</span>
       </div>
@@ -195,17 +202,19 @@ function lineKind(command: string): string {
 }
 
 function LoadSummary({ aof }: { aof: AofSnapshot }) {
+  // RDB 형식 base - 키는 바로 넣음, 명령 재실행은 그 뒤 부분만
+  const keys = aof.loadedKeys > 0 ? 'RDB base 키 ' + aof.loadedKeys.toLocaleString() + '개 + ' : ''
   switch (aof.loadStatus) {
     case 'OK':
       return (
         <span>
-          기동 시 명령 {aof.loadedCommands.toLocaleString()}개 재실행으로 복구 · {millis(aof.loadMillis)}
+          기동 시 {keys}명령 {aof.loadedCommands.toLocaleString()}개 재실행으로 복구 · {millis(aof.loadMillis)}
         </span>
       )
     case 'TRUNCATED':
       return (
         <span className="warn">
-          기동 시 복구 · {aof.truncatedFile} 끝의 덜 쓰인 명령 잘라냄 · 명령 {aof.loadedCommands.toLocaleString()}개
+          기동 시 복구 · {aof.truncatedFile} 끝의 덜 쓰인 명령 잘라냄 · {keys}명령 {aof.loadedCommands.toLocaleString()}개
         </span>
       )
     default:

@@ -182,6 +182,8 @@ export interface AofSnapshot {
   /** 마지막 fsync 이후 ms - 없으면 -1 */
   lastFsyncAgo: number
   loadStatus: 'OK' | 'NOT_EXIST' | 'EMPTY' | 'TRUNCATED' | 'FAILED' | 'OFF'
+  /** RDB 형식 base 에서 넣은 키 수 - aof-use-rdb-preamble yes */
+  loadedKeys: number
   loadedCommands: number
   loadMillis: number
   truncatedFile: string | null

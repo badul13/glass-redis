@@ -25,7 +25,7 @@ import java.util.List;
 /**
  * RDB 바이트 → 키스페이스 - rdbLoadRio, rdbLoadObject
  * 작은 인코딩 덩어리는 복사 없이 그대로 값으로, 한도 넘으면 그 자리에서 큰 인코딩으로 전환
- * 지난 만료 키는 버림 (마스터 기준), 빈 키는 건너뜀, 같은 키 두 번이면 실패
+ * 지난 만료 키는 버림 (마스터 기준, AOF base 제외), 빈 키는 건너뜀, 같은 키 두 번이면 실패
  * 미지원 - ziplist·zipmap 시절 타입(Redis 7 이전 파일), 스트림, 모듈, 함수, quicklist plain 노드
  */
 public final class RdbLoader {
@@ -53,6 +53,8 @@ public final class RdbLoader {
     private final byte[] data;
     private final Keyspace keyspace;
     private final long now;
+    /** RDBFLAGS_AOF_PREAMBLE - 지난 만료 키도 넣음, 지우는 건 복구 후 만료 처리 */
+    private final boolean aofPreamble;
     private int pos;
 
     private long keys;
@@ -60,10 +62,11 @@ public final class RdbLoader {
     private long emptySkipped;
     private String createdBy;
 
-    private RdbLoader(byte[] data, Keyspace keyspace) {
+    private RdbLoader(byte[] data, Keyspace keyspace, boolean aofPreamble) {
         this.data = data;
         this.keyspace = keyspace;
         this.now = keyspace.now();
+        this.aofPreamble = aofPreamble;
     }
 
     /** rdbLoad - 파일 없으면 NOT_EXIST, 실패해도 그때까지 넣은 키는 남음 (기동 중단 전제) */
@@ -86,18 +89,35 @@ public final class RdbLoader {
     }
 
     private static Result load(byte[] data, Keyspace keyspace, long start) {
-        RdbLoader loader = new RdbLoader(data, keyspace);
+        return new RdbLoader(data, keyspace, false).result(start);
+    }
+
+    /**
+     * AOF base 의 RDB 부분 - loadSingleAppendOnlyFile 의 rdbLoadRio(RDBFLAGS_AOF_PREAMBLE)
+     *
+     * @param end 체크섬 바로 뒤 - 이어지는 AOF 명령의 시작
+     */
+    record Preamble(Result result, int end) {
+    }
+
+    static Preamble loadAofPreamble(byte[] data, Keyspace keyspace) {
+        RdbLoader loader = new RdbLoader(data, keyspace, true);
+        Result result = loader.result(System.currentTimeMillis());
+        return new Preamble(result, loader.pos);
+    }
+
+    private Result result(long start) {
         String error = null;
         try {
-            loader.run();
+            run();
         } catch (CorruptRdbException e) {
             error = e.getMessage();
         } catch (RuntimeException e) {
             // listpack 속이 깨져 걷다가 범위를 벗어난 경우 등
-            error = "corrupt RDB at offset " + loader.pos + ": " + e;
+            error = "corrupt RDB at offset " + pos + ": " + e;
         }
-        return new Result(error == null ? Status.OK : Status.FAILED, loader.keys, loader.expired,
-                loader.emptySkipped, data.length, System.currentTimeMillis() - start, loader.createdBy, error);
+        return new Result(error == null ? Status.OK : Status.FAILED, keys, expired, emptySkipped, data.length,
+                System.currentTimeMillis() - start, createdBy, error);
     }
 
     /** rdbLoadRioWithLoadingCtx */
@@ -171,7 +191,7 @@ public final class RdbLoader {
             Value value = object(type);
             if (value == null) {
                 emptySkipped++;
-            } else if (expireAt != Entry.NO_EXPIRY && expireAt < now) {
+            } else if (!aofPreamble && expireAt != Entry.NO_EXPIRY && expireAt < now) {
                 expired++;
             } else {
                 Key k = new Key(key);

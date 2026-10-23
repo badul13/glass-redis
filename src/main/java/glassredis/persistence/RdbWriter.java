@@ -31,22 +31,23 @@ public final class RdbWriter {
      *
      * @param ctimeSeconds ctime 보조 필드 - 에포크 초
      * @param usedMemory   used-mem 보조 필드 - Redis는 zmalloc 사용량, 여기는 JVM 힙 사용량
+     * @param aofBase      AOF base 파일용 - aof-base 보조 필드 1 (RDBFLAGS_AOF_PREAMBLE)
      */
-    public static byte[] write(Keyspace keyspace, long ctimeSeconds, long usedMemory) {
+    public static byte[] write(Keyspace keyspace, long ctimeSeconds, long usedMemory, boolean aofBase) {
         RdbWriter writer = new RdbWriter();
-        writer.header(ctimeSeconds, usedMemory);
+        writer.header(ctimeSeconds, usedMemory, aofBase);
         writer.database(keyspace);
         return writer.finish();
     }
 
     /** "REDIS0011" + 보조 필드 - rdbSaveInfoAuxFields, 복제 정보(rsi) 없음 */
-    private void header(long ctimeSeconds, long usedMemory) {
+    private void header(long ctimeSeconds, long usedMemory, boolean aofBase) {
         out.writeBytes(String.format("REDIS%04d", RdbFormat.VERSION).getBytes(StandardCharsets.US_ASCII));
         aux("redis-ver", RdbFormat.REDIS_VERSION);
         aux("redis-bits", "64");
         aux("ctime", Long.toString(ctimeSeconds));
         aux("used-mem", Long.toString(usedMemory));
-        aux("aof-base", "0");
+        aux("aof-base", aofBase ? "1" : "0");
     }
 
     private void aux(String key, String value) {

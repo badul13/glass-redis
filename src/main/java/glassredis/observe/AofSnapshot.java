@@ -16,12 +16,13 @@ import java.util.List;
  * @param unsyncedBytes   OS로 넘겼지만 fsync 전인 바이트 - 정전 시 잃을 수 있는 양
  * @param lastFsyncAgoMillis 마지막 fsync 이후 ms - 없으면 -1
  * @param loadStatus      기동 시 복구 결과 - OK, NOT_EXIST, EMPTY, TRUNCATED, FAILED, 꺼져 있으면 OFF
+ * @param loadedKeys      기동 시 RDB 형식 base 에서 넣은 키 수
  * @param truncatedFile   복구 중 잘라낸 파일 - 없으면 null
  */
 public record AofSnapshot(boolean enabled, String fsync, List<FileView> files, long currentSize, long baseSize,
                           int rewritePercentage, long rewriteMinSize, boolean rewriting, long unsyncedBytes,
-                          long lastFsyncAgoMillis, String loadStatus, long loadedCommands, long loadMillis,
-                          String truncatedFile, int rewrites) {
+                          long lastFsyncAgoMillis, String loadStatus, long loadedKeys, long loadedCommands,
+                          long loadMillis, String truncatedFile, int rewrites) {
 
     /** @param type 'b' base, 'h' history, 'i' incr */
     public record FileView(String name, char type, long seq, long bytes) {
