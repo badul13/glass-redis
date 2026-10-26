@@ -102,6 +102,44 @@ export interface AofRewriteFailed extends Stamped {
 
 export type AofEvent = AofWritten | AofFsynced | AofRewriteStarted | AofRewriteFinished | AofRewriteFailed
 
+/** 직렬화까지 끝난 시점 */
+export interface RdbSaveStarted extends Stamped {
+  type: 'rdbSaveStarted'
+  /** SAVE, BGSAVE, 예약된 BGSAVE, save 규칙("save 60 10000"), 종료 */
+  trigger: string
+  /** false - SAVE 처럼 디스크 확정까지 실행 스레드에서 */
+  background: boolean
+  keys: number
+  /** 이 저장이 담은 변경 수 */
+  dirty: number
+  /** 실행 스레드에서 직렬화한 시간 - 그동안 다른 명령 대기 (Redis는 fork) */
+  serializeNanos: number
+  bytes: number
+}
+
+export interface RdbSaveFinished extends Stamped {
+  type: 'rdbSaveFinished'
+  trigger: string
+  background: boolean
+  bytes: number
+  /** 시작부터 완료 확인까지 - BGSAVE는 serverCron 이 알아챈 시점까지 */
+  nanos: number
+  /** 임시 파일 쓰기·fsync·이름 바꾸기 */
+  writeNanos: number
+  saved: number
+  /** 저장하는 동안 들어와 다음 저장으로 넘긴 변경 수 */
+  remaining: number
+}
+
+export interface RdbSaveFailed extends Stamped {
+  type: 'rdbSaveFailed'
+  trigger: string
+  background: boolean
+  reason: string
+}
+
+export type RdbEvent = RdbSaveStarted | RdbSaveFinished | RdbSaveFailed
+
 export type ActivityEvent =
   | ClientConnected
   | ClientDisconnected
@@ -109,6 +147,7 @@ export type ActivityEvent =
   | KeyRemoved
   | ExpiryCycleCompleted
   | AofEvent
+  | RdbEvent
 
 export interface ActivityBatch {
   /** 화면이 못 따라가 서버가 버린 개수 */
@@ -189,4 +228,46 @@ export interface AofSnapshot {
   truncatedFile: string | null
   rewrites: number
   files: AofFile[]
+}
+
+/** save 규칙 하나 - seconds 초 초과 + changes 번 이상 */
+export interface SaveRule {
+  seconds: number
+  changes: number
+}
+
+export interface RdbSnapshot {
+  /** dbfilename */
+  file: string
+  /** 지금 디스크의 파일 크기 - 없으면 -1 */
+  fileBytes: number
+  /** 마지막 저장 뒤 변경 횟수 (rdb_changes_since_last_save) */
+  dirty: number
+  /** 마지막 저장 성공 시각, 에포크 초 */
+  lastSave: number
+  /** 그 뒤 지난 초 - save 규칙 판정 값 */
+  sinceSave: number
+  saving: boolean
+  /** 진행 중 저장을 시작한 쪽 */
+  savingTrigger: string | null
+  /** 진행 중 저장이 담은 변경 수 (dirty_before_bgsave) */
+  savingDirty: number
+  /** BGSAVE SCHEDULE 로 미뤄 둔 저장 */
+  scheduled: boolean
+  lastBgsaveOk: boolean
+  /** 실패 뒤 자동 저장 재시도까지 남은 초 */
+  retryIn: number
+  /** stop-writes-on-bgsave-error 로 쓰기 거부 중 */
+  deniesWrites: boolean
+  /** AOF 재작성 진행 중 - save 규칙 판정 보류 */
+  otherChild: boolean
+  saves: number
+  /** 기동 시 복구 - AOF 로 복구했으면 AOF */
+  loadStatus: 'OK' | 'NOT_EXIST' | 'FAILED' | 'AOF'
+  loadedKeys: number
+  loadedExpired: number
+  loadBytes: number
+  loadMillis: number
+  /** 비어 있으면 자동 저장 꺼짐 */
+  rules: SaveRule[]
 }

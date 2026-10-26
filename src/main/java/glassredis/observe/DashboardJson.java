@@ -111,6 +111,43 @@ final class DashboardJson {
         return out.toString();
     }
 
+    static String rdb(RdbSnapshot snapshot) {
+        StringBuilder out = new StringBuilder(512);
+        out.append('{');
+        Json.field(out, "file", snapshot.file());
+        Json.field(out, "fileBytes", snapshot.fileBytes());
+        Json.field(out, "dirty", snapshot.dirty());
+        Json.field(out, "lastSave", snapshot.lastSave());
+        Json.field(out, "sinceSave", snapshot.sinceSave());
+        Json.field(out, "saving", snapshot.saving());
+        Json.field(out, "savingTrigger", snapshot.savingTrigger());
+        Json.field(out, "savingDirty", snapshot.savingDirty());
+        Json.field(out, "scheduled", snapshot.scheduled());
+        Json.field(out, "lastBgsaveOk", snapshot.lastBgsaveOk());
+        Json.field(out, "retryIn", snapshot.retryIn());
+        Json.field(out, "deniesWrites", snapshot.deniesWrites());
+        Json.field(out, "otherChild", snapshot.otherChild());
+        Json.field(out, "saves", snapshot.saves());
+        Json.field(out, "loadStatus", snapshot.loadStatus());
+        Json.field(out, "loadedKeys", snapshot.loadedKeys());
+        Json.field(out, "loadedExpired", snapshot.loadedExpired());
+        Json.field(out, "loadBytes", snapshot.loadBytes());
+        Json.field(out, "loadMillis", snapshot.loadMillis());
+        Json.name(out, "rules");
+        out.append('[');
+        for (RdbSnapshot.Rule rule : snapshot.rules()) {
+            if (out.charAt(out.length() - 1) != '[') {
+                out.append(',');
+            }
+            out.append('{');
+            Json.field(out, "seconds", rule.seconds());
+            Json.field(out, "changes", rule.changes());
+            out.append('}');
+        }
+        out.append("]}");
+        return out.toString();
+    }
+
     private static void appendStrings(StringBuilder out, List<String> texts) {
         out.append('[');
         for (int i = 0; i < texts.size(); i++) {
@@ -208,6 +245,31 @@ final class DashboardJson {
             }
             case Event.AofRewriteFailed failed -> {
                 Json.field(out, "type", "aofRewriteFailed");
+                Json.field(out, "reason", failed.reason());
+            }
+            case Event.RdbSaveStarted started -> {
+                Json.field(out, "type", "rdbSaveStarted");
+                Json.field(out, "trigger", started.trigger());
+                Json.field(out, "background", started.background());
+                Json.field(out, "keys", started.keys());
+                Json.field(out, "dirty", started.dirty());
+                Json.field(out, "serializeNanos", started.serializeNanos());
+                Json.field(out, "bytes", started.bytes());
+            }
+            case Event.RdbSaveFinished finished -> {
+                Json.field(out, "type", "rdbSaveFinished");
+                Json.field(out, "trigger", finished.trigger());
+                Json.field(out, "background", finished.background());
+                Json.field(out, "bytes", finished.bytes());
+                Json.field(out, "nanos", finished.totalNanos());
+                Json.field(out, "writeNanos", finished.writeNanos());
+                Json.field(out, "saved", finished.saved());
+                Json.field(out, "remaining", finished.remaining());
+            }
+            case Event.RdbSaveFailed failed -> {
+                Json.field(out, "type", "rdbSaveFailed");
+                Json.field(out, "trigger", failed.trigger());
+                Json.field(out, "background", failed.background());
                 Json.field(out, "reason", failed.reason());
             }
         }

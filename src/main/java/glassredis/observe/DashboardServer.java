@@ -65,6 +65,9 @@ public final class DashboardServer implements AutoCloseable {
     /** AOF 상태 - 기본은 보내지 않음 */
     private Supplier<AofSnapshot> aof = () -> null;
 
+    /** RDB 상태 - 기본은 보내지 않음 */
+    private Supplier<RdbSnapshot> rdb = () -> null;
+
     private HttpServer http;
     private ExecutorService handlers;
     private volatile boolean running;
@@ -89,6 +92,12 @@ public final class DashboardServer implements AutoCloseable {
     /** 기동 전 호출 - 키스페이스 스냅샷과 같은 주기로 AOF 상태 전송 */
     public DashboardServer withAof(Supplier<AofSnapshot> aofSnapshot) {
         this.aof = aofSnapshot;
+        return this;
+    }
+
+    /** 기동 전 호출 - AOF 상태와 같은 주기로 RDB 상태 전송 */
+    public DashboardServer withRdb(Supplier<RdbSnapshot> rdbSnapshot) {
+        this.rdb = rdbSnapshot;
         return this;
     }
 
@@ -165,6 +174,10 @@ public final class DashboardServer implements AutoCloseable {
                 AofSnapshot aofSnapshot = aof.get();
                 if (aofSnapshot != null) {
                     send(body, "aof", DashboardJson.aof(aofSnapshot));
+                }
+                RdbSnapshot rdbSnapshot = rdb.get();
+                if (rdbSnapshot != null) {
+                    send(body, "rdb", DashboardJson.rdb(rdbSnapshot));
                 }
             }
             body.flush();

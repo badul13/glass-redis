@@ -81,7 +81,7 @@ public final class Main {
         AppendOnlyLog aof = new AppendOnlyLog(
                 new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize, rdbPreamble),
                 events);
-        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError));
+        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError), events);
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
         server.start();
         reportAof(aof);
@@ -106,7 +106,7 @@ public final class Main {
     /** 대시보드 기동 실패 시 서버 유지 - 경고만 출력 */
     private static DashboardServer startDashboard(String bind, int port, EventHub events, RedisServer server) {
         DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot,
-                server::sortedSetSnapshot).withAof(server::aofSnapshot);
+                server::sortedSetSnapshot).withAof(server::aofSnapshot).withRdb(server::rdbSnapshot);
         try {
             dashboard.start();
             System.out.printf("[glass-redis] 대시보드: http://%s:%d%n", bind, dashboard.port());

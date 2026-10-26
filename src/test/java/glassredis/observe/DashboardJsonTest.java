@@ -84,6 +84,36 @@ class DashboardJsonTest {
                 + "{\"key\":\"stale\",\"type\":\"string\",\"encoding\":\"embstr\",\"size\":8,\"ttl\":-1200}]}", DashboardJson.snapshot(snapshot));
     }
 
+    @Test
+    @DisplayName("RDB 저장 시작·끝·실패")
+    void serialisesRdbSave() {
+        String json = DashboardJson.activity(List.of(
+                record(1, new Event.RdbSaveStarted("save 60 10000", true, 2, 10000, 900, 128)),
+                record(2, new Event.RdbSaveFinished("save 60 10000", true, 128, 5000, 4000, 10000, 3)),
+                record(3, new Event.RdbSaveFailed("BGSAVE", true, "Write error"))), 0);
+
+        assertEquals("{\"dropped\":0,\"events\":["
+                + "{\"seq\":1,\"at\":1700000000000,\"type\":\"rdbSaveStarted\",\"trigger\":\"save 60 10000\","
+                + "\"background\":true,\"keys\":2,\"dirty\":10000,\"serializeNanos\":900,\"bytes\":128},"
+                + "{\"seq\":2,\"at\":1700000000000,\"type\":\"rdbSaveFinished\",\"trigger\":\"save 60 10000\","
+                + "\"background\":true,\"bytes\":128,\"nanos\":5000,\"writeNanos\":4000,\"saved\":10000,\"remaining\":3},"
+                + "{\"seq\":3,\"at\":1700000000000,\"type\":\"rdbSaveFailed\",\"trigger\":\"BGSAVE\","
+                + "\"background\":true,\"reason\":\"Write error\"}]}", json);
+    }
+
+    @Test
+    @DisplayName("RDB 상태 - 저장 중이 아니면 savingTrigger 는 null")
+    void serialisesRdbSnapshot() {
+        RdbSnapshot snapshot = new RdbSnapshot("dump.rdb", 88, List.of(new RdbSnapshot.Rule(60, 10000)), 7,
+                1_700_000_000L, 12, false, null, 0, false, true, 0, false, false, 1, "OK", 4, 1, 88, 3);
+
+        assertEquals("{\"file\":\"dump.rdb\",\"fileBytes\":88,\"dirty\":7,\"lastSave\":1700000000,\"sinceSave\":12,"
+                + "\"saving\":false,\"savingTrigger\":null,\"savingDirty\":0,\"scheduled\":false,\"lastBgsaveOk\":true,"
+                + "\"retryIn\":0,\"deniesWrites\":false,\"otherChild\":false,\"saves\":1,\"loadStatus\":\"OK\","
+                + "\"loadedKeys\":4,\"loadedExpired\":1,\"loadBytes\":88,\"loadMillis\":3,"
+                + "\"rules\":[{\"seconds\":60,\"changes\":10000}]}", DashboardJson.rdb(snapshot));
+    }
+
     private static EventRecord record(long sequence, Event event) {
         return new EventRecord(sequence, 1_700_000_000_000L, event);
     }

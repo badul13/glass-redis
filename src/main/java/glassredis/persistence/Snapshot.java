@@ -1,5 +1,8 @@
 package glassredis.persistence;
 
+import glassredis.observe.Event;
+import glassredis.observe.EventBus;
+import glassredis.observe.RdbSnapshot;
 import glassredis.store.Keyspace;
 
 import java.io.IOException;
@@ -80,13 +83,18 @@ public final class Snapshot {
         }
     }
 
-    /** 진행 중 BGSAVE - 파일 확정까지 끝나면 future 완료 */
-    private record Bgsave(CompletableFuture<Void> written, long startNanos) {
+    /**
+     * 진행 중 BGSAVE - 파일 확정까지 끝나면 future 완료
+     *
+     * @param written 완료 값은 쓰기에 걸린 ns
+     */
+    private record Bgsave(CompletableFuture<Long> written, long startNanos, String trigger, int bytes) {
     }
 
     private final Config config;
     private final Path file;
     private final Path temp;
+    private final EventBus events;
     /** 초 단위 현재 시각 - 테스트에서 교체 */
     private final LongSupplier clock;
 
@@ -114,13 +122,22 @@ public final class Snapshot {
     private RdbLoader.Result loadResult;
 
     public Snapshot(Config config) {
-        this(config, () -> System.currentTimeMillis() / 1000);
+        this(config, EventBus.NONE);
+    }
+
+    public Snapshot(Config config, EventBus events) {
+        this(config, events, () -> System.currentTimeMillis() / 1000);
     }
 
     Snapshot(Config config, LongSupplier clock) {
+        this(config, EventBus.NONE, clock);
+    }
+
+    Snapshot(Config config, EventBus events, LongSupplier clock) {
         this.config = Objects.requireNonNull(config, "config");
         this.file = config.dir().resolve(config.filename());
         this.temp = config.dir().resolve("temp-" + ProcessHandle.current().pid() + ".rdb");
+        this.events = Objects.requireNonNull(events, "events");
         this.clock = clock;
         this.lastSave = clock.getAsLong();
     }
@@ -170,15 +187,25 @@ public final class Snapshot {
      * SAVE - 임시 파일에 쓰고 fsync 후 이름 바꾸기 (rdbSave)
      * 실패 시 임시 파일 삭제, 기존 dump.rdb 유지
      *
+     * @param trigger 화면 표시용 - SAVE, 종료
      * @return 실패 사유 - 성공이면 null
      */
-    public String save(Keyspace keyspace) {
+    public String save(Keyspace keyspace, String trigger) {
         saves++;
-        String failure = writeFile(serialize(keyspace));
+        long start = System.nanoTime();
+        byte[] content = serialize(keyspace);
+        long serializeNanos = System.nanoTime() - start;
+        publishStarted(trigger, false, keyspace.size(), serializeNanos, content.length);
+        String failure = writeFile(content);
         if (failure == null) {
+            long saved = dirty;
             dirty = 0;
             lastSave = clock.getAsLong();
             lastBgsaveOk = true;
+            long total = System.nanoTime() - start;
+            publishFinished(trigger, false, content.length, total, total - serializeNanos, saved);
+        } else {
+            publishFailed(trigger, false, failure);
         }
         return failure;
     }
@@ -187,21 +214,26 @@ public final class Snapshot {
      * BGSAVE·자동 저장 시작 - rdbSaveBackground
      * 다른 백그라운드 작업 확인은 호출하는 쪽 몫 (hasActiveChildProcess)
      * 완료 처리는 checkDone
+     *
+     * @param trigger 화면 표시용 - BGSAVE, 예약된 BGSAVE, save 규칙
      */
-    public void saveInBackground(Keyspace keyspace) {
+    public void saveInBackground(Keyspace keyspace, String trigger) {
         saves++;
         dirtyBeforeBgsave = dirty;
         lastBgsaveTry = clock.getAsLong();
         bgsaveScheduled = false;
         long start = System.nanoTime();
         byte[] content = serialize(keyspace);
-        CompletableFuture<Void> written = CompletableFuture.runAsync(() -> {
+        publishStarted(trigger, true, keyspace.size(), System.nanoTime() - start, content.length);
+        CompletableFuture<Long> written = CompletableFuture.supplyAsync(() -> {
+            long writeStart = System.nanoTime();
             String failure = writeFile(content);
             if (failure != null) {
                 throw new IllegalStateException(failure);
             }
+            return System.nanoTime() - writeStart;
         }, saveThread);
-        bgsave = new Bgsave(written, start);
+        bgsave = new Bgsave(written, start, trigger, content.length);
     }
 
     /**
@@ -215,20 +247,70 @@ public final class Snapshot {
         }
         Bgsave done = bgsave;
         bgsave = null;
+        long total = System.nanoTime() - done.startNanos();
         if (done.written().isCompletedExceptionally()) {
             lastBgsaveOk = false;
             String reason = done.written().handle((ok, e) -> e.getCause() == null
                     ? e.getMessage() : e.getCause().getMessage()).join();
             System.err.println("[glass-redis] 백그라운드 RDB 저장 실패: " + reason);
+            publishFailed(done.trigger(), true, reason);
         } else {
             // 저장하는 동안 들어온 변경은 남김
             dirty -= dirtyBeforeBgsave;
             lastSave = clock.getAsLong();
             lastBgsaveOk = true;
-            System.out.printf("[glass-redis] 백그라운드 RDB 저장 완료 (%dms)%n",
-                    (System.nanoTime() - done.startNanos()) / 1_000_000);
+            System.out.printf("[glass-redis] 백그라운드 RDB 저장 완료 (%dms)%n", total / 1_000_000);
+            publishFinished(done.trigger(), true, done.bytes(), total, done.written().join(), dirtyBeforeBgsave);
         }
         return true;
+    }
+
+    private void publishStarted(String trigger, boolean background, int keys, long serializeNanos, int bytes) {
+        if (events.enabled()) {
+            events.publish(new Event.RdbSaveStarted(trigger, background, keys, dirty, serializeNanos, bytes));
+        }
+    }
+
+    private void publishFinished(String trigger, boolean background, int bytes, long totalNanos, long writeNanos,
+                                 long saved) {
+        if (events.enabled()) {
+            events.publish(new Event.RdbSaveFinished(trigger, background, bytes, totalNanos, writeNanos, saved,
+                    dirty));
+        }
+    }
+
+    private void publishFailed(String trigger, boolean background, String reason) {
+        if (events.enabled()) {
+            events.publish(new Event.RdbSaveFailed(trigger, background, reason));
+        }
+    }
+
+    /**
+     * 대시보드용 - 실행 스레드에서
+     *
+     * @param otherChild AOF 재작성 진행 중
+     */
+    public RdbSnapshot view(boolean otherChild) {
+        long now = clock.getAsLong();
+        long fileBytes;
+        try {
+            // 같은 이름의 폴더 - 파일 없음으로
+            fileBytes = Files.isRegularFile(file) ? Files.size(file) : -1;
+        } catch (IOException e) {
+            fileBytes = -1;
+        }
+        List<RdbSnapshot.Rule> rules = config.saveParams().stream()
+                .map(p -> new RdbSnapshot.Rule(p.seconds(), p.changes()))
+                .toList();
+        // retryAllowed 의 경계 - now - try > 5 가 되는 첫 초
+        long retryIn = lastBgsaveOk ? 0 : Math.max(0, lastBgsaveTry + RETRY_DELAY_SECONDS + 1 - now);
+        RdbLoader.Result loaded = loadResult;
+        return new RdbSnapshot(config.filename(), fileBytes, rules, dirty, lastSave, now - lastSave,
+                bgsave != null, bgsave == null ? null : bgsave.trigger(), bgsave == null ? 0 : dirtyBeforeBgsave,
+                bgsaveScheduled, lastBgsaveOk, retryIn, deniesWrites(), otherChild, saves,
+                loaded == null ? "AOF" : loaded.status().name(), loaded == null ? 0 : loaded.keys(),
+                loaded == null ? 0 : loaded.expired(), loaded == null ? 0 : loaded.bytes(),
+                loaded == null ? 0 : loaded.elapsedMillis());
     }
 
     /** serverCron - 지금 맞는 save 규칙, 없으면 null */
@@ -271,7 +353,7 @@ public final class Snapshot {
         if (config.saveParams().isEmpty()) {
             return null;
         }
-        return save(keyspace);
+        return save(keyspace, "종료");
     }
 
     /**

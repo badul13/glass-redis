@@ -3,6 +3,7 @@ import { AofPanel } from './components/AofPanel'
 import { CommandStream } from './components/CommandStream'
 import { ExpiryPanel } from './components/ExpiryPanel'
 import { KeyspaceView } from './components/KeyspaceView'
+import { RdbPanel } from './components/RdbPanel'
 import { SortedSetView } from './components/SortedSetView'
 import { useEventStream } from './useEventStream'
 import { useSortedSet } from './useSortedSet'
@@ -41,6 +42,7 @@ export default function App() {
         <div className="side">
           <KeyspaceView snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
           <ExpiryPanel {...dashboard} />
+          <RdbPanel {...dashboard} />
         </div>
       </main>
 

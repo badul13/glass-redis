@@ -6,6 +6,7 @@ import glassredis.command.Errors;
 import glassredis.command.Propagation;
 import glassredis.command.impl.PingCommand;
 import glassredis.observe.AofSnapshot;
+import glassredis.observe.RdbSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
@@ -143,6 +144,13 @@ final class CommandLoop implements AutoCloseable {
     CompletableFuture<AofSnapshot> aofSnapshot() {
         CompletableFuture<AofSnapshot> result = new CompletableFuture<>();
         queue.add(() -> result.complete(aof.snapshot()));
+        return result;
+    }
+
+    /** 대시보드용 RDB 상태 - 실행 스레드에서, RDB 없으면 null */
+    CompletableFuture<RdbSnapshot> rdbSnapshot() {
+        CompletableFuture<RdbSnapshot> result = new CompletableFuture<>();
+        queue.add(() -> result.complete(persistence.rdbSnapshot()));
         return result;
     }
 

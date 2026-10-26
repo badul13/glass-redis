@@ -121,7 +121,7 @@ code {
 .side {
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   gap: 12px;
 }
 
@@ -880,4 +880,226 @@ table.keys td.type .encoding {
 
 .aof-foot .warn {
   color: var(--active);
+}
+
+/* RDB 패널 */
+
+.rdb {
+  --block: var(--active);
+  --write: #6fa8dc;
+  --notice: #333d43;
+}
+
+.rdb-misconf {
+  padding: 7px 14px;
+  font-size: 11.5px;
+  color: var(--error);
+  background: rgba(240, 138, 122, 0.08);
+  border-bottom: 1px solid rgba(240, 138, 122, 0.25);
+}
+
+.rdb-misconf b {
+  font-family: var(--mono);
+  margin-right: 6px;
+}
+
+.rdb-rules {
+  padding: 8px 14px 6px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rdb-summary {
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+
+.rdb-summary b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rdb-summary .pending {
+  color: var(--active);
+}
+
+.rdb-summary .hold {
+  color: var(--faint);
+}
+
+.rdb-rule {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.rdb-rule .name {
+  font-family: var(--mono);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.rdb-rule .rule-state {
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.rdb-rule.met .rule-state,
+.rdb-rule.met .name {
+  color: var(--active);
+}
+
+.rdb-rule.fired .name,
+.rdb-rule.fired .rule-state {
+  color: var(--write);
+}
+
+.rdb-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rdb-meter .track {
+  height: 5px;
+  border-radius: 3px;
+  background: #222a2f;
+  overflow: hidden;
+}
+
+.rdb-meter .track i {
+  display: block;
+  height: 100%;
+  background: var(--faint);
+  transition: width 0.3s;
+}
+
+.rdb-meter.met .track i {
+  background: var(--active);
+}
+
+.rdb-meter .label {
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rdb-saves {
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+}
+
+.rdb-save {
+  padding: 3px 0;
+}
+
+.rdb-save .line {
+  display: grid;
+  grid-template-columns: auto 112px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 10px;
+}
+
+.rdb-save .time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.rdb-save .trigger {
+  font-family: var(--mono);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rdb-save .track {
+  display: flex;
+  height: 8px;
+  border-radius: 2px;
+  background: #1c2226;
+  overflow: hidden;
+}
+
+/* 0ns 구간도 보이게 최소 2px */
+.rdb-save .track i {
+  min-width: 2px;
+  height: 100%;
+}
+
+.rdb-save .track .block {
+  background: var(--block);
+}
+
+.rdb-save .track .write {
+  background: var(--write);
+}
+
+.rdb-save .track .notice {
+  background: var(--notice);
+}
+
+.rdb-save.running .track::after {
+  content: '';
+  flex: 1;
+  background: repeating-linear-gradient(135deg, rgba(111, 168, 220, 0.5) 0 3px, transparent 3px 6px);
+  animation: rdb-writing 0.8s linear infinite;
+  background-size: 12px 12px;
+}
+
+@keyframes rdb-writing {
+  to {
+    background-position: 12px 0;
+  }
+}
+
+.rdb-save .total {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.rdb-save .detail {
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.rdb-save .pending {
+  color: var(--active);
+}
+
+.rdb-save .error,
+.rdb-save.failed .total {
+  color: var(--error);
+}
+
+.rdb-foot {
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+.rdb-foot b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rdb-foot .error {
+  color: var(--error);
 }

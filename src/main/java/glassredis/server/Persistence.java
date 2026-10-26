@@ -1,6 +1,7 @@
 package glassredis.server;
 
 import glassredis.command.ServerControl;
+import glassredis.observe.RdbSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.Snapshot;
 import glassredis.resp.RespValue;
@@ -76,7 +77,7 @@ final class Persistence implements ServerControl {
         if (saving()) {
             return new RespValue.Err("ERR Background save already in progress");
         }
-        String failure = snapshot.save(keyspace);
+        String failure = snapshot.save(keyspace, "SAVE");
         if (failure != null) {
             log("RDB 저장 실패: " + failure);
             return new RespValue.Err("ERR");
@@ -100,13 +101,18 @@ final class Persistence implements ServerControl {
             snapshot.scheduleBgsave();
             return new RespValue.SimpleString("Background saving scheduled");
         }
-        snapshot.saveInBackground(keyspace);
+        snapshot.saveInBackground(keyspace, "BGSAVE");
         return new RespValue.SimpleString("Background saving started");
     }
 
     @Override
     public long lastSave() {
         return snapshot == null ? 0 : snapshot.lastSave();
+    }
+
+    /** 대시보드용 RDB 상태 - RDB 없으면 null */
+    RdbSnapshot rdbSnapshot() {
+        return snapshot == null ? null : snapshot.view(aof.rewriting());
     }
 
     /**
@@ -126,14 +132,14 @@ final class Persistence implements ServerControl {
             Snapshot.SaveParam due = snapshot == null ? null : snapshot.dueSaveParam();
             if (due != null) {
                 log("%d초 안에 %d번 이상 바뀌어 백그라운드 저장을 시작합니다", due.seconds(), due.changes());
-                snapshot.saveInBackground(keyspace);
+                snapshot.saveInBackground(keyspace, "save " + due.seconds() + " " + due.changes());
             }
             if (!childActive()) {
                 aof.autoRewrite(keyspace);
             }
         }
         if (!childActive() && snapshot != null && snapshot.scheduledBgsaveDue()) {
-            snapshot.saveInBackground(keyspace);
+            snapshot.saveInBackground(keyspace, "예약된 BGSAVE");
         }
     }
 

@@ -1,5 +1,7 @@
 package glassredis.persistence;
 
+import glassredis.observe.Event;
+import glassredis.observe.RdbSnapshot;
 import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
@@ -94,7 +96,7 @@ class SnapshotTest {
         snapshot.addDirty(5);
         now.addAndGet(10);
 
-        snapshot.saveInBackground(keyspace);
+        snapshot.saveInBackground(keyspace, "BGSAVE");
         assertTrue(snapshot.saving());
         snapshot.addDirty(2);
         awaitDone(snapshot);
@@ -119,7 +121,7 @@ class SnapshotTest {
         now.addAndGet(3601);
         snapshot.addDirty(1);
 
-        snapshot.saveInBackground(keyspace);
+        snapshot.saveInBackground(keyspace, "BGSAVE");
         awaitDone(snapshot);
         assertTrue(snapshot.deniesWrites());
         assertEquals(1, snapshot.dirty(), "실패하면 dirty 그대로");
@@ -134,7 +136,7 @@ class SnapshotTest {
 
         Files.delete(dir.resolve("blocked.rdb").resolve("inside"));
         Files.delete(dir.resolve("blocked.rdb"));
-        assertNull(snapshot.save(keyspace));
+        assertNull(snapshot.save(keyspace, "SAVE"));
         assertFalse(snapshot.deniesWrites(), "SAVE 성공도 lastbgsave_status 를 OK 로");
         assertEquals(0, snapshot.dirty());
     }
@@ -144,7 +146,7 @@ class SnapshotTest {
     void stopWritesDisabled() throws Exception {
         Files.createDirectories(dir.resolve("blocked.rdb").resolve("inside"));
         Snapshot snapshot = open("blocked.rdb", false);
-        snapshot.saveInBackground(keyspace("k", "v"));
+        snapshot.saveInBackground(keyspace("k", "v"), "BGSAVE");
         awaitDone(snapshot);
         assertFalse(snapshot.deniesWrites());
     }
@@ -156,8 +158,95 @@ class SnapshotTest {
         assertFalse(snapshot.scheduledBgsaveDue());
         snapshot.scheduleBgsave();
         assertTrue(snapshot.scheduledBgsaveDue());
-        snapshot.saveInBackground(keyspace("k", "v"));
+        snapshot.saveInBackground(keyspace("k", "v"), "BGSAVE");
         assertFalse(snapshot.scheduledBgsaveDue(), "시작하면 예약 해제");
         awaitDone(snapshot);
+    }
+
+    @Test
+    @DisplayName("저장 이벤트 - 시작 시 담은 변경 수, 끝날 때 저장 중 들어와 남은 변경 수")
+    void publishesSaveEvents() throws Exception {
+        List<Event> seen = new ArrayList<>();
+        Snapshot snapshot = new Snapshot(Snapshot.Config.defaults(dir), seen::add, now::get);
+        opened.add(snapshot);
+        Keyspace keyspace = keyspace("k", "v");
+        snapshot.addDirty(5);
+
+        snapshot.saveInBackground(keyspace, "save 60 10000");
+        snapshot.addDirty(2);
+        awaitDone(snapshot);
+        assertNull(snapshot.save(keyspace, "SAVE"));
+
+        assertEquals(4, seen.size());
+        Event.RdbSaveStarted started = (Event.RdbSaveStarted) seen.get(0);
+        assertEquals("save 60 10000", started.trigger());
+        assertTrue(started.background());
+        assertEquals(1, started.keys());
+        assertEquals(5, started.dirty());
+        Event.RdbSaveFinished finished = (Event.RdbSaveFinished) seen.get(1);
+        assertEquals(5, finished.saved());
+        assertEquals(2, finished.remaining());
+        assertEquals(started.bytes(), finished.bytes());
+        assertEquals(Files.size(dir.resolve("dump.rdb")), finished.bytes());
+        assertTrue(finished.writeNanos() > 0 && finished.writeNanos() <= finished.totalNanos());
+
+        Event.RdbSaveFinished foreground = (Event.RdbSaveFinished) seen.get(3);
+        assertFalse(foreground.background());
+        assertEquals(2, foreground.saved());
+        assertEquals(0, foreground.remaining());
+    }
+
+    @Test
+    @DisplayName("BGSAVE 실패 이벤트 - 사유 포함, 화면 상태에 재시도까지 남은 초")
+    void publishesFailure() throws Exception {
+        Files.createDirectories(dir.resolve("blocked.rdb").resolve("inside"));
+        List<Event> seen = new ArrayList<>();
+        Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, "blocked.rdb"), seen::add, now::get);
+        opened.add(snapshot);
+
+        snapshot.saveInBackground(keyspace("k", "v"), "BGSAVE");
+        awaitDone(snapshot);
+
+        Event.RdbSaveFailed failed = (Event.RdbSaveFailed) seen.get(1);
+        assertEquals("BGSAVE", failed.trigger());
+        assertTrue(failed.reason().startsWith("Write error while saving DB to the disk"));
+        RdbSnapshot view = snapshot.view(false);
+        assertFalse(view.lastBgsaveOk());
+        assertTrue(view.deniesWrites());
+        assertEquals(6, view.retryIn(), "now - lastbgsave_try > 5 가 되는 첫 초까지");
+        now.addAndGet(6);
+        assertEquals(0, snapshot.view(false).retryIn());
+    }
+
+    @Test
+    @DisplayName("화면 상태 - 규칙, 지난 초, 진행 중 저장이 담은 변경 수")
+    void view() throws Exception {
+        Snapshot snapshot = open("dump.rdb", true);
+        snapshot.addDirty(3);
+        now.addAndGet(42);
+
+        RdbSnapshot idle = snapshot.view(true);
+        assertEquals(List.of(new RdbSnapshot.Rule(3600, 1), new RdbSnapshot.Rule(300, 100),
+                new RdbSnapshot.Rule(60, 10000)), idle.rules());
+        assertEquals(3, idle.dirty());
+        assertEquals(42, idle.sinceSave());
+        assertEquals(-1, idle.fileBytes());
+        assertTrue(idle.otherChild());
+        assertEquals("AOF", idle.loadStatus(), "기동 시 RDB 를 안 읽었으면 AOF 로 복구한 것");
+
+        snapshot.saveInBackground(keyspace("k", "v"), "BGSAVE");
+        snapshot.addDirty(1);
+        RdbSnapshot saving = snapshot.view(false);
+        assertTrue(saving.saving());
+        assertEquals("BGSAVE", saving.savingTrigger());
+        assertEquals(3, saving.savingDirty());
+        assertEquals(4, saving.dirty());
+        awaitDone(snapshot);
+
+        RdbSnapshot done = snapshot.view(false);
+        assertFalse(done.saving());
+        assertNull(done.savingTrigger());
+        assertEquals(0, done.sinceSave());
+        assertEquals(Files.size(dir.resolve("dump.rdb")), done.fileBytes());
     }
 }

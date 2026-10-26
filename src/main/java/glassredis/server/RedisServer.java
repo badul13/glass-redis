@@ -4,6 +4,7 @@ import glassredis.command.CommandRegistry;
 import glassredis.observe.AofSnapshot;
 import glassredis.observe.EventBus;
 import glassredis.observe.KeyspaceSnapshot;
+import glassredis.observe.RdbSnapshot;
 import glassredis.observe.SortedSetSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.RdbLoader;
@@ -118,6 +119,18 @@ public final class RedisServer implements AutoCloseable {
     public AofSnapshot aofSnapshot() {
         try {
             return commandLoop.aofSnapshot().get(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (ExecutionException | TimeoutException e) {
+            return null;
+        }
+    }
+
+    /** keyspaceSnapshot()과 같은 방식 - RDB 없으면 null */
+    public RdbSnapshot rdbSnapshot() {
+        try {
+            return commandLoop.rdbSnapshot().get(1, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;

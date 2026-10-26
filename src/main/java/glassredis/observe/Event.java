@@ -74,6 +74,30 @@ public sealed interface Event {
     record AofRewriteFailed(String reason) implements Event {
     }
 
+    /**
+     * RDB 저장 시작 - 직렬화까지 끝난 시점
+     *
+     * @param trigger        SAVE, BGSAVE, 예약된 BGSAVE, save 규칙("save 60 10000"), 종료
+     * @param background     BGSAVE 계열 - false면 SAVE 처럼 디스크 확정까지 실행 스레드에서
+     * @param dirty          이 저장이 담은 변경 수
+     * @param serializeNanos 실행 스레드에서 직렬화한 시간 - 그동안 다른 명령 대기 (Redis는 fork)
+     */
+    record RdbSaveStarted(String trigger, boolean background, int keys, long dirty, long serializeNanos, int bytes)
+            implements Event {
+    }
+
+    /**
+     * @param totalNanos 시작부터 완료 확인까지 - BGSAVE는 serverCron 이 알아챈 시점까지
+     * @param writeNanos 임시 파일 쓰기·fsync·이름 바꾸기
+     * @param remaining  저장하는 동안 들어와 다음 저장으로 넘긴 변경 수
+     */
+    record RdbSaveFinished(String trigger, boolean background, int bytes, long totalNanos, long writeNanos,
+                           long saved, long remaining) implements Event {
+    }
+
+    record RdbSaveFailed(String trigger, boolean background, String reason) implements Event {
+    }
+
     enum RemovalReason {
         /** 읽기 시 만료 확인 후 삭제 */
         LAZY_EXPIRED,
