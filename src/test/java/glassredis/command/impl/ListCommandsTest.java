@@ -35,6 +35,15 @@ class ListCommandsTest {
     }
 
     @Test
+    @DisplayName("LPUSH/RPUSH dirty - 원소마다 1 (pushGenericCommand 의 server.dirty++)")
+    void pushCountsDirtyPerElement() {
+        run("RPUSH", "k", "a", "b", "c");
+        assertEquals(3, tester.lastDirty);
+        run("LPUSH", "k", "d");
+        assertEquals(1, tester.lastDirty);
+    }
+
+    @Test
     @DisplayName("LPOP/RPOP - 양 끝에서 추출, 비면 키 소멸")
     void popRemovesKeyWhenEmpty() {
         run("RPUSH", "k", "a", "b");

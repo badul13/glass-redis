@@ -73,7 +73,8 @@ public final class PushCommand implements Command {
         for (byte[] value : values) {
             list.push(value, left);
         }
-        ctx.dirty();
+        // 원소마다 server.dirty++
+        ctx.dirty(values.size());
         return new RespValue.Int(list.length());
     }
 }

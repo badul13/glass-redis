@@ -23,6 +23,9 @@ final class CommandTester {
     /** AOF로 갈 명령 - 공백으로 이은 문자열, 트랜잭션은 MULTI·EXEC 포함 */
     final List<String> propagated = new ArrayList<>();
 
+    /** 마지막 명령의 변경 횟수 - server.dirty 증가량 */
+    long lastDirty;
+
     CommandTester() {
         keyspace.setExpiredListener(key -> {
             List<byte[]> del = List.of("DEL".getBytes(StandardCharsets.US_ASCII), key.bytes());
@@ -41,6 +44,7 @@ final class CommandTester {
         }
         ctx.propagation().begin(all);
         RespValue reply = registry.find(argv[0].toUpperCase(Locale.ROOT)).execute(ctx, all.subList(1, all.size()));
+        lastDirty = ctx.propagation().dirtyCount();
         record(ctx.propagation().finish());
         return reply;
     }
