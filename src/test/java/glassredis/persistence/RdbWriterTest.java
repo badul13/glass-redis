@@ -156,6 +156,25 @@ class RdbWriterTest {
     }
 
     @Test
+    @DisplayName("serialize 뒤 키스페이스가 바뀌어도 finish 결과는 serialize 시점 그대로 (fork 스냅샷)")
+    void bodyIsSnapshotAtSerialize() {
+        run("SET", "s", "hello");
+        run("RPUSH", "l", "a", "b");
+        run("HSET", "h", "f", "v");
+        byte[] expected = RdbWriter.write(keyspace, 1, 1, false);
+
+        RdbWriter.Body body = RdbWriter.serialize(keyspace, 1, 1, false);
+        // 같은 배열을 제자리에서 고치는 명령들 - 값 바이트를 복사해 두지 않았다면 결과가 바뀜
+        run("APPEND", "s", " world");
+        run("RPUSH", "l", "c");
+        run("HSET", "h", "f", "w");
+        run("DEL", "s");
+
+        assertEquals(expected.length, body.finishedLength());
+        assertEquals(HexFormat.of().formatHex(expected), HexFormat.of().formatHex(body.finish()));
+    }
+
+    @Test
     @DisplayName("CRC64 - Redis crc64 시험값")
     void crc64() {
         byte[] text = "123456789".getBytes(StandardCharsets.US_ASCII);

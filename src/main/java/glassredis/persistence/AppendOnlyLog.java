@@ -183,12 +183,14 @@ public final class AppendOnlyLog implements AutoCloseable {
 
     /** rewriteAppendOnlyFile 의 본문 - preamble 이면 RDB (aof-base 1), 아니면 명령 나열 */
     private byte[] baseContent(Keyspace keyspace) {
-        if (!config.rdbPreamble()) {
-            return AofRewriter.rewrite(keyspace);
-        }
+        return config.rdbPreamble() ? rdbBody(keyspace).finish() : AofRewriter.rewrite(keyspace);
+    }
+
+    /** preamble 용 RDB 본문 - aof-base 1, EOF·CRC64 는 finish() */
+    private static RdbWriter.Body rdbBody(Keyspace keyspace) {
         Runtime runtime = Runtime.getRuntime();
-        return RdbWriter.write(keyspace, System.currentTimeMillis() / 1000, runtime.totalMemory() - runtime.freeMemory(),
-                true);
+        return RdbWriter.serialize(keyspace, System.currentTimeMillis() / 1000,
+                runtime.totalMemory() - runtime.freeMemory(), true);
     }
 
     /** rewriteAppendOnlyFile - 임시 이름으로 쓰고 fsync 후 교체 */
@@ -388,13 +390,16 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
 
         long start = System.nanoTime();
-        byte[] content = baseContent(keyspace);
+        // RDB preamble 이면 EOF·CRC64 는 쓰기 스레드에서 (자식 프로세스 몫)
+        RdbWriter.Body rdb = config.rdbPreamble() ? rdbBody(keyspace) : null;
+        byte[] commands = rdb == null ? AofRewriter.rewrite(keyspace) : null;
+        int length = rdb != null ? rdb.finishedLength() : commands.length;
         long serializeNanos = System.nanoTime() - start;
 
         Path temp = config.dir().resolve("temp-rewriteaof-bg-" + ProcessHandle.current().pid() + ".aof");
         CompletableFuture<Void> written = CompletableFuture.runAsync(() -> {
             try {
-                Files.write(temp, content);
+                Files.write(temp, rdb != null ? rdb.finish() : commands);
                 Fsync.file(temp);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -405,7 +410,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         rewriteScheduled = false;
         if (events.enabled()) {
             events.publish(new Event.AofRewriteStarted(trigger, keyspace.size(), currentSize, serializeNanos,
-                    content.length, channelName));
+                    length, channelName));
         }
         return null;
     }

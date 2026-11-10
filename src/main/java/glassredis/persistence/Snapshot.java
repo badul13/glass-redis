@@ -223,17 +223,19 @@ public final class Snapshot {
         lastBgsaveTry = clock.getAsLong();
         bgsaveScheduled = false;
         long start = System.nanoTime();
-        byte[] content = serialize(keyspace);
-        publishStarted(trigger, true, keyspace.size(), System.nanoTime() - start, content.length);
+        // 실행 스레드는 순회까지, EOF·CRC64 는 쓰기 스레드에서 (자식 프로세스 몫)
+        RdbWriter.Body body = serializeBody(keyspace);
+        int bytes = body.finishedLength();
+        publishStarted(trigger, true, keyspace.size(), System.nanoTime() - start, bytes);
         CompletableFuture<Long> written = CompletableFuture.supplyAsync(() -> {
             long writeStart = System.nanoTime();
-            String failure = writeFile(content);
+            String failure = writeFile(body.finish());
             if (failure != null) {
                 throw new IllegalStateException(failure);
             }
             return System.nanoTime() - writeStart;
         }, saveThread);
-        bgsave = new Bgsave(written, start, trigger, content.length);
+        bgsave = new Bgsave(written, start, trigger, bytes);
     }
 
     /**
@@ -373,8 +375,12 @@ public final class Snapshot {
     }
 
     private byte[] serialize(Keyspace keyspace) {
+        return serializeBody(keyspace).finish();
+    }
+
+    private RdbWriter.Body serializeBody(Keyspace keyspace) {
         Runtime runtime = Runtime.getRuntime();
-        return RdbWriter.write(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory(), false);
+        return RdbWriter.serialize(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory(), false);
     }
 
     /** 임시 파일 → fsync → 이름 바꾸기, 실패 시 임시 파일 삭제 */

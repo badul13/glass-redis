@@ -10,8 +10,8 @@ import glassredis.store.StringValue;
 import glassredis.store.Value;
 import glassredis.store.encoding.Listpack;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /**
  * 키스페이스 → RDB 바이트 - rdbSaveRio
@@ -21,23 +21,59 @@ import java.nio.charset.StandardCharsets;
  */
 public final class RdbWriter {
 
-    private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    private final Buffer out = new Buffer();
 
     private RdbWriter() {
     }
 
     /**
      * 실행 스레드에서 호출 - 순회 중 키스페이스 변경 없음
+     * SAVE 처럼 한 스레드에서 끝까지 - 백그라운드 저장은 serialize() + Body.finish() 로 나눔
      *
      * @param ctimeSeconds ctime 보조 필드 - 에포크 초
      * @param usedMemory   used-mem 보조 필드 - Redis는 zmalloc 사용량, 여기는 JVM 힙 사용량
      * @param aofBase      AOF base 파일용 - aof-base 보조 필드 1 (RDBFLAGS_AOF_PREAMBLE)
      */
     public static byte[] write(Keyspace keyspace, long ctimeSeconds, long usedMemory, boolean aofBase) {
+        return serialize(keyspace, ctimeSeconds, usedMemory, aofBase).finish();
+    }
+
+    /**
+     * 키스페이스 순회만 - 실행 스레드 몫 (fork 직전까지에 해당)
+     * EOF·CRC64 는 Body.finish() - 백그라운드 스레드 몫 (Redis 는 자식 프로세스가 쓰면서 체크섬 계산)
+     */
+    public static Body serialize(Keyspace keyspace, long ctimeSeconds, long usedMemory, boolean aofBase) {
         RdbWriter writer = new RdbWriter();
         writer.header(ctimeSeconds, usedMemory, aofBase);
         writer.database(keyspace);
-        return writer.finish();
+        return new Body(writer.out.bytes, writer.out.size);
+    }
+
+    /**
+     * EOF 앞까지 직렬화된 본문 - 키스페이스 값을 복사해 둔 것이라 이후 변경과 무관
+     *
+     * @param bytes  앞 length 바이트만 유효
+     */
+    public record Body(byte[] bytes, int length) {
+
+        /** EOF 1바이트 + CRC64 8바이트 */
+        private static final int TRAILER = 9;
+
+        /** 완성 파일 크기 - finish() 전에 알 수 있음 */
+        public int finishedLength() {
+            return length + TRAILER;
+        }
+
+        /** EOF + 앞 전체의 CRC64 - 어느 스레드에서든 호출 가능 */
+        public byte[] finish() {
+            byte[] file = Arrays.copyOf(bytes, length + TRAILER);
+            file[length] = (byte) RdbFormat.OPCODE_EOF;
+            long crc = Crc64.update(0, file, 0, length + 1);
+            for (int i = 0; i < 8; i++) {
+                file[length + 1 + i] = (byte) (crc >>> (8 * i));
+            }
+            return file;
+        }
     }
 
     /** "REDIS0011" + 보조 필드 - rdbSaveInfoAuxFields, 복제 정보(rsi) 없음 */
@@ -76,15 +112,6 @@ public final class RdbWriter {
             rawString(key.bytes());
             object(entry.value());
         });
-    }
-
-    /** EOF + 앞 전체의 CRC64 */
-    private byte[] finish() {
-        type(RdbFormat.OPCODE_EOF);
-        byte[] body = out.toByteArray();
-        long crc = Crc64.update(0, body, 0, body.length);
-        littleEndian(crc, 8);
-        return out.toByteArray();
     }
 
     /** rdbSaveObjectType */
@@ -241,6 +268,41 @@ public final class RdbWriter {
     private void bigEndian(long value, int bytes) {
         for (int i = bytes - 1; i >= 0; i--) {
             out.write((int) (value >>> (8 * i)) & 0xFF);
+        }
+    }
+
+    /**
+     * 늘어나는 바이트 배열 - ByteArrayOutputStream 대체
+     * BAOS 는 write 마다 synchronized·용량 확인, toByteArray 마다 전체 복사 - 실행 스레드 정지 시간에 그대로 더해짐
+     * 한 스레드 전용이라 잠금 없음, 결과는 복사 없이 배열째 넘김
+     */
+    private static final class Buffer {
+
+        private byte[] bytes = new byte[64 * 1024];
+        private int size;
+
+        void write(int b) {
+            if (size == bytes.length) {
+                grow(1);
+            }
+            bytes[size++] = (byte) b;
+        }
+
+        void writeBytes(byte[] data) {
+            if (bytes.length - size < data.length) {
+                grow(data.length);
+            }
+            System.arraycopy(data, 0, bytes, size, data.length);
+            size += data.length;
+        }
+
+        /** 두 배씩 - 복사 총량은 최종 크기의 2배 이하 */
+        private void grow(int needed) {
+            long target = Math.max((long) bytes.length * 2, (long) size + needed);
+            if (target > Integer.MAX_VALUE - 8) {
+                throw new OutOfMemoryError("RDB 가 2GB 를 넘음");
+            }
+            bytes = Arrays.copyOf(bytes, (int) target);
         }
     }
 }
