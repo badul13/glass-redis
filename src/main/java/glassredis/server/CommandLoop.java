@@ -45,7 +45,7 @@ final class CommandLoop implements AutoCloseable {
     /** Redis hz 기본값 */
     private static final int HZ = ActiveExpireCycle.HZ;
 
-    /** 무제한 큐 - 커넥션당 명령 1개 + 주기 작업 1개라 최대 커넥션 수 + 1 */
+    /** 무제한 큐 - 커넥션당 명령 묶음 1개 + 주기 작업 1개라 최대 커넥션 수 + 1 */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
 
     private final Thread thread = Thread.ofPlatform().name("glass-redis-executor").unstarted(this::runLoop);
@@ -120,12 +120,39 @@ final class CommandLoop implements AutoCloseable {
      * @param connectionId 이벤트 표시용 - 실행과 무관
      */
     CompletableFuture<RespValue> submit(Command command, List<byte[]> argv, long connectionId) {
-        CompletableFuture<RespValue> reply = new CompletableFuture<>();
+        return submitAll(List.of(new Request(command, argv)), connectionId).thenApply(replies -> replies.get(0));
+    }
+
+    /**
+     * 한 커넥션이 한 번에 받은 명령들 - 큐 작업 1개로 연달아 실행 (processInputBuffer)
+     * 사이에 다른 커넥션 명령·주기 작업 안 끼어듦, 응답은 beforeSleep 에서 한꺼번에 전달
+     *
+     * @param requests     받은 순서, 비어 있으면 안 됨
+     * @param connectionId 이벤트 표시용 - 실행과 무관
+     * @return 요청과 같은 순서의 응답
+     */
+    CompletableFuture<List<RespValue>> submitAll(List<Request> requests, long connectionId) {
+        CompletableFuture<List<RespValue>> replies = new CompletableFuture<>();
         queue.add(() -> {
-            RespValue result = execute(command, argv, connectionId);
-            pendingReplies.add(() -> reply.complete(result));
+            List<RespValue> results = new ArrayList<>(requests.size());
+            for (Request request : requests) {
+                results.add(request.command() == null
+                        ? Errors.unknownCommand(request.argv().get(0),
+                                request.argv().subList(1, request.argv().size()))
+                        : execute(request.command(), request.argv(), connectionId));
+            }
+            pendingReplies.add(() -> replies.complete(results));
         });
-        return reply;
+        return replies;
+    }
+
+    /**
+     * 실행할 명령 하나
+     *
+     * @param command 없는 명령이면 null - unknown command 에러 응답
+     * @param argv    이름 포함 전체 인자 - AOF에는 받은 그대로 기록
+     */
+    record Request(Command command, List<byte[]> argv) {
     }
 
     /**

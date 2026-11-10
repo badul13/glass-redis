@@ -1,6 +1,5 @@
 package glassredis.resp;
 
-import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,10 +25,22 @@ public final class RespReader {
     /** $123, *2 같은 숫자 줄의 최대 길이 */
     private static final int MAX_NUMBER_LINE = 32;
 
-    private final InputStream in;
+    /** 소켓 read 1회 크기 - PROTO_IOBUF_LEN */
+    public static final int IO_BUFFER_SIZE = 16 * 1024;
+
+    private final QueryBuffer in;
 
     public RespReader(InputStream in) {
-        this.in = in instanceof BufferedInputStream buffered ? buffered : new BufferedInputStream(in, 8192);
+        this.in = new QueryBuffer(in);
+    }
+
+    /**
+     * 이미 받은 바이트만으로 다음 명령을 끝까지 읽을 수 있는지 - 소켓 대기 없음
+     * processInputBuffer 의 '버퍼에 완성된 명령이 남아 있는 동안' 조건
+     * 프레이밍 손상도 true - 다음 readCommand() 가 대기 없이 예외
+     */
+    public boolean hasBufferedCommand() {
+        return in.scanCommand();
     }
 
     /**
@@ -222,5 +233,163 @@ public final class RespReader {
         return (typeByte >= 0x20 && typeByte < 0x7f)
                 ? String.valueOf((char) typeByte)
                 : ("0x" + Integer.toHexString(typeByte));
+    }
+
+    /**
+     * 소켓 앞 16KB 버퍼 - 아직 안 읽은 바이트 buf[pos, count) 들여다보기용
+     * BufferedInputStream 상속 금지 - 하위 클래스면 내부 잠금이 synchronized 로 바뀜
+     * synchronized 안 소켓 대기 = 가상 스레드가 캐리어 고정(JDK 21 pinning), 커넥션 수 > 코어 수면 교착
+     * 커넥션 스레드 하나만 쓰므로 잠금 없음
+     */
+    private static final class QueryBuffer extends InputStream {
+
+        /** 숫자 줄이 아직 덜 들어옴 */
+        private static final long NEED_MORE = Long.MIN_VALUE;
+
+        /** 숫자 줄 손상 - readCommand 가 대기 없이 예외 */
+        private static final long MALFORMED = Long.MIN_VALUE + 1;
+
+        private final InputStream in;
+
+        private final byte[] buf = new byte[IO_BUFFER_SIZE];
+
+        /** 다음에 읽을 위치 */
+        private int pos;
+
+        /** 받은 바이트 끝 */
+        private int count;
+
+        /** scanNumber 가 남기는 다음 위치 */
+        private int next;
+
+        QueryBuffer(InputStream in) {
+            this.in = in;
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (pos >= count && !fill()) {
+                return -1;
+            }
+            return buf[pos++] & 0xff;
+        }
+
+        /** 버퍼에 남은 것 먼저, 비었으면 소켓 read 1회 - 큰 요청은 버퍼 거치지 않고 바로 */
+        @Override
+        public int read(byte[] destination, int offset, int length) throws IOException {
+            if (length == 0) {
+                return 0;
+            }
+            if (pos >= count) {
+                if (length >= buf.length) {
+                    return in.read(destination, offset, length);
+                }
+                if (!fill()) {
+                    return -1;
+                }
+            }
+            int n = Math.min(length, count - pos);
+            System.arraycopy(buf, pos, destination, offset, n);
+            pos += n;
+            return n;
+        }
+
+        @Override
+        public int available() throws IOException {
+            return (count - pos) + in.available();
+        }
+
+        @Override
+        public void close() throws IOException {
+            in.close();
+        }
+
+        /** 빈 버퍼에 소켓 read 1회 - readQueryFromClient, EOF면 false */
+        private boolean fill() throws IOException {
+            int n = in.read(buf, 0, buf.length);
+            if (n <= 0) {
+                pos = count = 0;
+                return false;
+            }
+            pos = 0;
+            count = n;
+            return true;
+        }
+
+        /** buf[pos, count) 안에서 명령 하나를 끝까지 따라가 봄 - readCommand 와 같은 판정 */
+        boolean scanCommand() {
+            int p = pos;
+            if (p >= count) {
+                return false;
+            }
+            byte first = buf[p];
+            if (first != '*') {
+                // 인라인 - 빈 줄은 즉시, 아니면 줄 끝까지
+                if (first == '\n' || first == '\r') {
+                    return true;
+                }
+                return lineEnd(p + 1) >= 0 || count - p > MAX_INLINE_LENGTH;
+            }
+
+            long arguments = scanNumber(p + 1);
+            if (arguments == NEED_MORE) {
+                return false;
+            }
+            if (arguments == MALFORMED || arguments < 0 || arguments > MAX_ARRAY_LENGTH) {
+                return true;
+            }
+            p = next;
+            for (long i = 0; i < arguments; i++) {
+                if (p >= count) {
+                    return false;
+                }
+                if (buf[p] != '$') {
+                    return true;
+                }
+                long length = scanNumber(p + 1);
+                if (length == NEED_MORE) {
+                    return false;
+                }
+                if (length == MALFORMED || length < 0 || length > MAX_BULK_LENGTH) {
+                    return true;
+                }
+                // 데이터 + CRLF
+                long end = (long) next + length + 2;
+                if (end > count) {
+                    return false;
+                }
+                p = (int) end;
+            }
+            return true;
+        }
+
+        /** from 부터 숫자 줄 하나 - 성공 시 next 에 줄 다음 위치 */
+        private long scanNumber(int from) {
+            int end = lineEnd(from);
+            if (end < 0) {
+                return count - from > MAX_NUMBER_LINE ? MALFORMED : NEED_MORE;
+            }
+            int last = end > from && buf[end - 1] == '\r' ? end - 1 : end;
+            if (last == from || last - from > MAX_NUMBER_LINE) {
+                return MALFORMED;
+            }
+            try {
+                long value = Long.parseLong(new String(buf, from, last - from, StandardCharsets.US_ASCII));
+                next = end + 1;
+                return value;
+            } catch (NumberFormatException e) {
+                return MALFORMED;
+            }
+        }
+
+        /** buf[from, count) 의 첫 LF 위치, 없으면 -1 */
+        private int lineEnd(int from) {
+            for (int i = from; i < count; i++) {
+                if (buf[i] == '\n') {
+                    return i;
+                }
+            }
+            return -1;
+        }
     }
 }

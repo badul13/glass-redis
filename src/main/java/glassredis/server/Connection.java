@@ -13,6 +13,8 @@ import glassredis.resp.RespWriter;
 import java.io.IOException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
@@ -58,50 +60,70 @@ final class Connection implements Runnable {
         }
     }
 
+    /**
+     * 읽기 한 번에 들어온 명령을 묶어 실행 - readQueryFromClient + processInputBuffer
+     * 첫 명령만 소켓 대기, 이후는 버퍼에 완성된 명령이 남아 있는 동안만
+     * 응답은 묶음 단위로 쓰고 flush 1회 - 파이프라인이면 명령 N개에 큐 왕복 1회·flush 1회
+     */
     private void serve(RespReader reader, RespWriter writer) throws IOException {
+        List<CommandLoop.Request> batch = new ArrayList<>();
         while (true) {
-            List<byte[]> argv;
-            try {
-                argv = reader.readCommand();
-            } catch (RespProtocolException e) {
-                // 다음 명령 경계 불명 - 에러 응답 후 종료
-                writer.write(Errors.protocol(e.getMessage()));
-                writer.flush();
-                return;
-            }
+            batch.clear();
+            RespValue protocolError = null;
+            boolean closing = false;
 
-            if (argv == null) {
-                return;
-            }
-            if (argv.isEmpty()) {
-                continue;
-            }
-
-            String name = new String(argv.get(0), StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);
-            Command command = registry.find(name);
-
-            RespValue reply;
-            if (command == null) {
-                reply = Errors.unknownCommand(argv.get(0), argv.subList(1, argv.size()));
-            } else {
-                // 응답 수신 전 다음 명령 읽기 보류 - 파이프라인 순서 보장
+            do {
+                List<byte[]> argv;
                 try {
-                    reply = commandLoop.submit(command, argv, id).get();
+                    argv = reader.readCommand();
+                } catch (RespProtocolException e) {
+                    // 다음 명령 경계 불명 - 앞 명령까지 실행 후 에러 응답·종료 (setProtocolError)
+                    protocolError = Errors.protocol(e.getMessage());
+                    closing = true;
+                    break;
+                }
+                if (argv == null) {
+                    // 끊김 - 이미 받은 명령은 실행
+                    closing = true;
+                    break;
+                }
+                if (argv.isEmpty()) {
+                    continue;
+                }
+                String name = new String(argv.get(0), StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);
+                Command command = registry.find(name);
+                batch.add(new CommandLoop.Request(command, argv));
+                // QUIT 뒤 명령은 실행 안 함 - CLIENT_CLOSE_AFTER_REPLY
+                if (command != null && command.closesConnection()) {
+                    closing = true;
+                    break;
+                }
+            } while (reader.hasBufferedCommand());
+
+            if (!batch.isEmpty()) {
+                // 응답 수신 전 다음 읽기 보류 - 파이프라인 순서 보장
+                List<RespValue> replies;
+                try {
+                    replies = commandLoop.submitAll(List.copyOf(batch), id).get();
                 } catch (InterruptedException e) {
                     // 서버 종료
                     Thread.currentThread().interrupt();
                     return;
                 } catch (ExecutionException e) {
                     // 도달 불가 예상 - 실행 스레드가 예외를 에러 응답으로 변환
-                    log("명령 %s 의 응답을 받지 못했습니다: %s", name, e.getCause());
-                    reply = Errors.internal(String.valueOf(e.getCause()));
+                    log("명령 %d개의 응답을 받지 못했습니다: %s", batch.size(), e.getCause());
+                    replies = Collections.nCopies(batch.size(), Errors.internal(String.valueOf(e.getCause())));
+                }
+                for (RespValue reply : replies) {
+                    writer.write(reply);
                 }
             }
-
-            writer.write(reply);
+            if (protocolError != null) {
+                writer.write(protocolError);
+            }
             writer.flush();
 
-            if (command != null && command.closesConnection()) {
+            if (closing) {
                 return;
             }
         }

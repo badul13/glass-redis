@@ -129,6 +129,51 @@ class ServerSmokeTest {
     }
 
     @Test
+    @DisplayName("파이프라이닝 - 모르는 명령이 끼어도 앞뒤 명령 응답 순서 유지")
+    void pipeliningWithUnknownCommand() throws IOException {
+        try (Client client = connect()) {
+            client.send("SET smoke:mixed 1\r\nNOPE a\r\nGET smoke:mixed\r\n");
+            assertEquals("+OK", client.readLine());
+            assertEquals("-ERR unknown command 'NOPE', with args beginning with: 'a' ", client.readLine());
+            assertEquals("$1", client.readLine());
+            assertEquals("1", client.readLine());
+        }
+    }
+
+    @Test
+    @DisplayName("QUIT 뒤에 붙여 보낸 명령은 실행 안 함")
+    void commandsAfterQuitAreDropped() throws IOException {
+        try (Client client = connect()) {
+            client.send("SET smoke:quit 1\r\nQUIT\r\nSET smoke:quit 2\r\n");
+            assertEquals("+OK", client.readLine());
+            assertEquals("+OK", client.readLine());
+            assertTrue(client.isClosedByServer());
+        }
+        try (Client client = connect()) {
+            client.send("GET smoke:quit\r\n");
+            assertEquals("$1", client.readLine());
+            assertEquals("1", client.readLine());
+        }
+    }
+
+    @Test
+    @DisplayName("프로토콜 오류 앞 명령까지는 실행·응답, 뒤 명령은 버림")
+    void protocolErrorAfterValidCommand() throws IOException {
+        try (Client client = connect()) {
+            client.send("SET smoke:proto x\r\n*abc\r\nSET smoke:proto y\r\n");
+            assertEquals("+OK", client.readLine());
+            String reply = client.readLine();
+            assertTrue(reply.startsWith("-ERR Protocol error:"), "실제 응답: " + reply);
+            assertTrue(client.isClosedByServer());
+        }
+        try (Client client = connect()) {
+            client.send("GET smoke:proto\r\n");
+            assertEquals("$1", client.readLine());
+            assertEquals("x", client.readLine());
+        }
+    }
+
+    @Test
     @DisplayName("바이너리 값 왕복 시 바이트 변화 없음")
     void binaryRoundTrip() throws IOException {
         try (Client client = connect()) {

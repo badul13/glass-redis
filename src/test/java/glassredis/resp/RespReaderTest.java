@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -125,6 +126,57 @@ class RespReaderTest {
         assertEquals(RespValue.NIL, reader("*-1\r\n").readValue());
         assertEquals(RespValue.Array.of(new RespValue.Int(1), new RespValue.Int(2)),
                 reader("*2\r\n:1\r\n:2\r\n").readValue());
+    }
+
+    @Test
+    @DisplayName("hasBufferedCommand - 한 번에 받은 명령이 남아 있는 동안만 true")
+    void bufferedCommandsInOneRead() throws IOException {
+        RespReader reader = reader("*1\r\n$4\r\nPING\r\nECHO hi\r\n*1\r\n$4\r\nPING\r\n");
+
+        // 첫 readCommand 전에는 아직 아무것도 안 받음
+        assertFalse(reader.hasBufferedCommand());
+        reader.readCommand();
+        assertTrue(reader.hasBufferedCommand());
+        reader.readCommand();
+        assertTrue(reader.hasBufferedCommand());
+        reader.readCommand();
+        assertFalse(reader.hasBufferedCommand());
+    }
+
+    @Test
+    @DisplayName("hasBufferedCommand - 덜 들어온 명령은 false (소켓 대기 필요)")
+    void partialCommandIsNotBuffered() throws IOException {
+        // 뒷부분이 아직 안 온 상황들
+        for (String tail : List.of("*", "*2\r", "*2\r\n$4\r\nECHO\r\n", "*2\r\n$4\r\nECHO\r\n$5\r\nhel",
+                "*2\r\n$4\r\nECHO\r\n$5\r\nhello\r", "ECHO hi")) {
+            RespReader reader = reader("PING\r\n" + tail);
+            reader.readCommand();
+            assertFalse(reader.hasBufferedCommand(), "덜 들어온 꼬리: " + tail.replace("\r\n", "\\r\\n"));
+        }
+    }
+
+    @Test
+    @DisplayName("hasBufferedCommand - 프레이밍 손상은 true, 이어지는 readCommand 가 바로 예외")
+    void malformedCommandIsReportedAsBuffered() throws IOException {
+        for (String tail : List.of("*abc\r\n", "*1\r\n+PING\r\n", "*1\r\n$-1\r\n")) {
+            RespReader reader = reader("PING\r\n" + tail);
+            reader.readCommand();
+            assertTrue(reader.hasBufferedCommand(), "손상된 꼬리: " + tail.replace("\r\n", "\\r\\n"));
+            assertThrows(RespProtocolException.class, reader::readCommand);
+        }
+    }
+
+    @Test
+    @DisplayName("버퍼(16KB)보다 큰 인자도 그대로 읽음")
+    void argumentLargerThanBuffer() throws IOException {
+        String big = "x".repeat(RespReader.IO_BUFFER_SIZE * 3 + 7);
+        RespReader reader = reader("*2\r\n$4\r\nECHO\r\n$" + big.length() + "\r\n" + big + "\r\nPING\r\n");
+
+        List<byte[]> argv = reader.readCommand();
+        assertEquals(big, text(argv.get(1)));
+        assertTrue(reader.hasBufferedCommand());
+        assertEquals("PING", text(reader.readCommand().get(0)));
+        assertNull(reader.readCommand());
     }
 
     private static RespReader reader(String raw) {
