@@ -68,7 +68,9 @@ class EventTest {
         assertEquals("+OK", reply(RespValue.OK));
         assertEquals(":42", reply(new RespValue.Int(42)));
         assertEquals("(nil)", reply(RespValue.NIL));
-        assertEquals("-ERR 뭔가 잘못됨", reply(new RespValue.Err("ERR 뭔가 잘못됨")));
+        // 에러에 실린 클라이언트 바이트(UTF-8)는 화면에서 다시 글자로
+        String wire = new String("ERR 뭔가 잘못됨".getBytes(StandardCharsets.UTF_8), StandardCharsets.ISO_8859_1);
+        assertEquals("-ERR 뭔가 잘못됨", reply(new RespValue.Err(wire)));
         assertEquals("hello", reply(RespValue.BulkString.of("hello")));
         assertEquals("(2개)", reply(RespValue.Array.of(RespValue.OK, RespValue.NIL)));
     }

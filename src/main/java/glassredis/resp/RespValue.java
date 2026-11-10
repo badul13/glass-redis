@@ -8,19 +8,22 @@ import java.util.Objects;
 /** RESP2 값 - sealed라 switch가 default 없이 누락 검출 */
 public sealed interface RespValue {
 
-    /** CR/LF 포함 시 프레이밍 손상 - 생성 시점 차단 */
+    /**
+     * CR/LF 포함 시 프레이밍 손상 - 생성 시점 차단
+     * 글자 1개 = 바이트 1개 (ISO-8859-1) - 클라이언트 바이트를 Redis 처럼 그대로 되돌려 보내기 위함
+     */
     record SimpleString(String text) implements RespValue {
         public SimpleString {
             Objects.requireNonNull(text, "text");
-            requireNoCrlf(text);
+            requireWireText(text);
         }
     }
 
-    /** 첫 단어 - ERR, WRONGTYPE 같은 대문자 접두어 */
+    /** 첫 단어 - ERR, WRONGTYPE 같은 대문자 접두어, 글자 1개 = 바이트 1개 (SimpleString 과 같음) */
     record Err(String message) implements RespValue {
         public Err {
             Objects.requireNonNull(message, "message");
-            requireNoCrlf(message);
+            requireWireText(message);
         }
     }
 
@@ -75,9 +78,13 @@ public sealed interface RespValue {
     SimpleString PONG = new SimpleString("PONG");
     Array EMPTY_ARRAY = new Array(List.of());
 
-    private static void requireNoCrlf(String text) {
-        if (text.indexOf('\r') >= 0 || text.indexOf('\n') >= 0) {
-            throw new IllegalArgumentException("단순 문자열/에러에는 CR 또는 LF 를 넣을 수 없습니다: " + text);
+    /** 바이트 하나로 못 쓰는 글자(0xFF 초과)·CR·LF 차단 - 클라이언트 바이트는 ISO-8859-1 로 디코딩해서 넣기 */
+    private static void requireWireText(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\r' || c == '\n' || c > 0xFF) {
+                throw new IllegalArgumentException("단순 문자열/에러에 넣을 수 없는 글자: " + text);
+            }
         }
     }
 }

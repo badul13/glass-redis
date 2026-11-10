@@ -43,7 +43,8 @@ public final class RespWriter {
 
     private void writeLine(char prefix, String body) throws IOException {
         out.write(prefix);
-        out.write(body.getBytes(StandardCharsets.UTF_8));
+        // 글자 1개 = 바이트 1개 - RespValue 규약
+        out.write(body.getBytes(StandardCharsets.ISO_8859_1));
         out.write(CRLF);
     }
 }

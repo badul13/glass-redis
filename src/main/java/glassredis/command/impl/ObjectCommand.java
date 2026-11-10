@@ -32,7 +32,7 @@ public final class ObjectCommand implements Command {
         if (args.isEmpty()) {
             return Errors.wrongNumberOfArguments(name());
         }
-        String subcommand = new String(args.get(0), StandardCharsets.UTF_8);
+        String subcommand = new String(args.get(0), StandardCharsets.ISO_8859_1);
         if (!subcommand.toUpperCase(Locale.ROOT).equals("ENCODING")) {
             return Errors.unknownSubcommand(subcommand, name());
         }

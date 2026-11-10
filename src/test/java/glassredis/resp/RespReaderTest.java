@@ -91,28 +91,104 @@ class RespReaderTest {
     @Test
     @DisplayName("배열 원소가 벌크 문자열이 아니면 프로토콜 에러")
     void rejectsNonBulkArgument() {
-        assertThrows(RespProtocolException.class, () -> reader("*1\r\n+PING\r\n").readCommand());
+        assertProtocolError("expected '$', got '+'", "*1\r\n+PING\r\n");
+        // 빈 줄이면 Redis 가 보는 바이트는 \r - 에러 문구에서는 공백
+        assertProtocolError("expected '$', got ' '", "*1\r\n\r\n");
     }
 
     @Test
     @DisplayName("길이 자리에 숫자가 아닌 것이 오면 프로토콜 에러")
     void rejectsNonNumericLength() {
-        assertThrows(RespProtocolException.class, () -> reader("*abc\r\n").readCommand());
+        assertProtocolError("invalid multibulk length", "*abc\r\n");
+        assertProtocolError("invalid bulk length", "*1\r\n$x\r\n");
     }
 
     @Test
-    @DisplayName("터무니없이 큰 벌크 길이는 메모리 할당 전에 거절")
-    void rejectsHugeBulkLength() {
+    @DisplayName("길이 숫자는 string2ll 처럼 엄격 - +1, 01 거절")
+    void lengthsAreStrictIntegers() {
+        assertProtocolError("invalid multibulk length", "*+1\r\n$4\r\nPING\r\n");
+        assertProtocolError("invalid multibulk length", "*01\r\n$4\r\nPING\r\n");
+        assertProtocolError("invalid bulk length", "*1\r\n$04\r\nPING\r\n");
+        assertProtocolError("invalid bulk length", "*1\r\n$-1\r\n");
+    }
+
+    @Test
+    @DisplayName("개수 0 이하는 빈 명령 - 에러 아님")
+    void nonPositiveCountIsEmptyCommand() throws IOException {
+        RespReader reader = reader("*0\r\n*-1\r\n*1\r\n$4\r\nPING\r\n");
+        assertTrue(reader.readCommand().isEmpty());
+        assertTrue(reader.readCommand().isEmpty());
+        assertEquals("PING", text(reader.readCommand().get(0)));
+    }
+
+    @Test
+    @DisplayName("터무니없이 큰 길이는 메모리 할당 전에 거절")
+    void rejectsHugeLengths() {
         // 검사가 없으면 OutOfMemoryError 발생
-        assertThrows(RespProtocolException.class,
-                () -> reader("*1\r\n$999999999999\r\n").readCommand());
+        assertProtocolError("invalid bulk length", "*1\r\n$999999999999\r\n");
+        assertProtocolError("invalid bulk length", "*1\r\n$536870913\r\n");
+        assertProtocolError("invalid multibulk length", "*2147483648\r\n");
     }
 
     @Test
-    @DisplayName("벌크 데이터 뒤에 CRLF 가 없으면 프로토콜 에러")
-    void rejectsMissingTrailingCrlf() {
-        assertThrows(RespProtocolException.class,
-                () -> reader("*1\r\n$4\r\nPINGxx").readCommand());
+    @DisplayName("벌크 데이터 뒤 2바이트와 숫자 줄 \\r 뒤 1바이트는 확인 없이 건너뜀")
+    void trailingBytesAreSkippedUnchecked() throws IOException {
+        RespReader reader = reader("*1\r\n$4\r\nPINGxx*1\rX$4\r\nPING\r\n");
+        assertEquals("PING", text(reader.readCommand().get(0)));
+        assertEquals("PING", text(reader.readCommand().get(0)));
+        assertNull(reader.readCommand());
+    }
+
+    @Test
+    @DisplayName("명령 중간에 끊기면 에러 없이 null - 덜 받은 명령은 버림")
+    void endOfStreamMidCommand() throws IOException {
+        for (String partial : List.of("*2\r\n$4\r\nECHO\r\n$3\r\nab", "*1\r\n$4", "*1\n$4\nPING\n", "ECHO hi")) {
+            RespReader reader = reader(partial);
+            assertNull(reader.readCommand(), "덜 받은 명령: " + partial.replace("\r\n", "\\r\\n"));
+        }
+    }
+
+    @Test
+    @DisplayName("인라인 - 따옴표·이스케이프 (sdssplitargs)")
+    void inlineQuotesAndEscapes() throws IOException {
+        List<byte[]> argv = reader("SET \"a\\x41\\n\\tz\" 'b\\'c' \"x\\qy\" 'p\\nq' \"\"\r\n").readCommand();
+
+        assertEquals(6, argv.size());
+        assertEquals("aA\n\tz", text(argv.get(1)));
+        assertEquals("b'c", text(argv.get(2)));
+        assertEquals("xqy", text(argv.get(3)));
+        assertEquals("p\\nq", text(argv.get(4)));
+        assertEquals("", text(argv.get(5)));
+    }
+
+    @Test
+    @DisplayName("인라인 - 닫는 따옴표 뒤에 공백이 아니거나 안 닫히면 unbalanced quotes")
+    void inlineUnbalancedQuotes() {
+        for (String line : List.of("ECHO \"a\"b\r\n", "ECHO 'a'b\r\n", "ECHO \"abc\r\n", "ECHO a\"b\"c\r\n")) {
+            assertProtocolError("unbalanced quotes in request", line);
+        }
+    }
+
+    @Test
+    @DisplayName("인라인 - 0x00 뒤 줄바꿈은 줄 끝 아님 (strchr), 끊기면 null")
+    void inlineNulHidesNewline() throws IOException {
+        assertNull(reader("ECHO a\0b\r\nPING\r\n").readCommand());
+    }
+
+    @Test
+    @DisplayName("인라인 한도 64KB - 길이가 아니라 소켓 read 경계에서 판정")
+    void inlineLimitIsCheckedAtReadBoundary() throws IOException {
+        // 16KB 씩 받으면 65536 에서 '초과' 아님 → 다음 read 에서 줄 끝
+        String justOver = "x".repeat(70_000);
+        assertEquals(justOver, text(reader("ECHO " + justOver + "\r\n").readCommand().get(1)));
+
+        assertProtocolError("too big inline request", "ECHO " + "x".repeat(200_000) + "\r\n");
+        assertProtocolError("too big mbulk count string", "*1" + "1".repeat(200_000) + "\r\n");
+    }
+
+    private static void assertProtocolError(String message, String raw) {
+        RespProtocolException error = assertThrows(RespProtocolException.class, () -> reader(raw).readCommand());
+        assertEquals("Protocol error: " + message, error.getMessage());
     }
 
     @Test

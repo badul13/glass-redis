@@ -39,9 +39,10 @@ final class Display {
     /** 앞 기호 - RESP 타입 바이트 */
     static String reply(RespValue value) {
         return switch (value) {
-            case RespValue.SimpleString simple -> "+" + truncate(simple.text());
+            // 단순 문자열·에러는 글자 1개 = 바이트 1개 - 화면에는 UTF-8 로 풀어서
+            case RespValue.SimpleString simple -> "+" + text(simple.text().getBytes(StandardCharsets.ISO_8859_1));
             // 에러 메시지에 클라이언트 인자 포함 가능 - 자르기 대상
-            case RespValue.Err error -> "-" + truncate(error.message());
+            case RespValue.Err error -> "-" + text(error.message().getBytes(StandardCharsets.ISO_8859_1));
             case RespValue.Int number -> ":" + number.value();
             case RespValue.BulkString bulk -> text(bulk.bytes());
             case RespValue.Array array -> "(" + array.items().size() + "개)";

@@ -18,6 +18,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -137,6 +138,26 @@ class ServerSmokeTest {
             assertEquals("-ERR unknown command 'NOPE', with args beginning with: 'a' ", client.readLine());
             assertEquals("$1", client.readLine());
             assertEquals("1", client.readLine());
+        }
+    }
+
+    @Test
+    @DisplayName("에러 문구에 실린 클라이언트 바이트는 0x80 이상도 그대로 (UTF-8 아니어도)")
+    void errorEchoesRawBytes() throws IOException {
+        try (Client client = connect()) {
+            // 모르는 명령 이름 0xFF, 인자 '한'(UTF-8 3바이트)
+            client.sendRaw(new byte[] {'*', '2', '\r', '\n', '$', '1', '\r', '\n', (byte) 0xFF, '\r', '\n',
+                    '$', '3', '\r', '\n', (byte) 0xED, (byte) 0x95, (byte) 0x9C, '\r', '\n'});
+            byte[] expected = ("-ERR unknown command 'ÿ', with args beginning with: 'í\u0095\u009C' \r\n")
+                    .getBytes(StandardCharsets.ISO_8859_1);
+            assertEquals(HexFormat.of().formatHex(expected),
+                    HexFormat.of().formatHex(client.readExactly(expected.length)));
+
+            // 프로토콜 에러의 '$' 자리 바이트도 그대로
+            client.sendRaw(new byte[] {'*', '1', '\r', '\n', (byte) 0xC3, '\r', '\n'});
+            byte[] protocol = "-ERR Protocol error: expected '$', got 'Ã'\r\n".getBytes(StandardCharsets.ISO_8859_1);
+            assertEquals(HexFormat.of().formatHex(protocol),
+                    HexFormat.of().formatHex(client.readExactly(protocol.length)));
         }
     }
 

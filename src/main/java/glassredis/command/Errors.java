@@ -35,8 +35,8 @@ public final class Errors {
             argsText.write('\'');
             argsText.write(' ');
         }
-        String message = "ERR unknown command '" + utf8(cString(name, ECHOED_INPUT_LIMIT))
-                + "', with args beginning with: " + utf8(argsText.toByteArray());
+        String message = "ERR unknown command '" + wire(cString(name, ECHOED_INPUT_LIMIT))
+                + "', with args beginning with: " + wire(argsText.toByteArray());
         return new RespValue.Err(newlinesToSpaces(message));
     }
 
@@ -120,7 +120,7 @@ public final class Errors {
 
     /** EXPIRE 계열의 모르는 옵션 */
     public static RespValue.Err unsupportedOption(byte[] option) {
-        String message = "ERR Unsupported option " + utf8(cString(option, Integer.MAX_VALUE));
+        String message = "ERR Unsupported option " + wire(cString(option, Integer.MAX_VALUE));
         return new RespValue.Err(newlinesToSpaces(trimTrailingNewlines(message)));
     }
 
@@ -149,8 +149,9 @@ public final class Errors {
         return Arrays.copyOf(bytes, end);
     }
 
-    private static String utf8(byte[] bytes) {
-        return new String(bytes, StandardCharsets.UTF_8);
+    /** 클라이언트 바이트 그대로 - 글자 1개 = 바이트 1개 (RespValue 규약), UTF-8 로 풀면 깨진 바이트가 바뀜 */
+    private static String wire(byte[] bytes) {
+        return new String(bytes, StandardCharsets.ISO_8859_1);
     }
 
     private static String newlinesToSpaces(String text) {
