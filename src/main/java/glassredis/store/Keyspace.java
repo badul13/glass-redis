@@ -120,6 +120,15 @@ public final class Keyspace {
         return (int) dict.size();
     }
 
+    /** 만료 여부만 판단, 삭제 없음 - keyIsExpired (KEYS) */
+    public boolean isExpired(Key key) {
+        if (loading) {
+            return false;
+        }
+        Long expireAt = expires.peek(key);
+        return expireAt != null && now() > expireAt;
+    }
+
     /** 만료 시 삭제 후 true - 지연 만료, 주기적 만료 공통 경로 */
     public boolean expireIfDue(Key key, RemovalReason reason) {
         if (loading) {
