@@ -13,6 +13,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class DashboardJsonTest {
 
     @Test
+    @DisplayName("복제 상태 - 레플리카 목록, 레플리카면 마스터 링크, 최근 흐름")
+    void serialisesReplication() {
+        ReplicationSnapshot snapshot = new ReplicationSnapshot("replica", "a".repeat(40), "0".repeat(40), -1, 120,
+                true, 1048576, 1, 120, 1, 20504, false,
+                List.of(new ReplicationSnapshot.Replica(5, "127.0.0.1:6381", "online", 100, 1, 120, 20504, false)),
+                new ReplicationSnapshot.Master("127.0.0.1", 6379, "connected", 120, 0, null, -1, 0), 1, 0, 0,
+                List.of(new ReplicationSnapshot.Entry(1700000000000L, "full", "127.0.0.1:6379", "+FULLRESYNC 0", 0)));
+
+        assertEquals("{\"role\":\"replica\",\"replid\":\"" + "a".repeat(40) + "\",\"replid2\":\"" + "0".repeat(40)
+                + "\",\"secondReplidOffset\":-1,\"offset\":120,\"backlog\":true,\"backlogSize\":1048576,"
+                + "\"backlogFirstByte\":1,\"backlogHistlen\":120,\"backlogBlocks\":1,\"bufferMemory\":20504,"
+                + "\"socketTransfer\":false,\"syncFull\":1,\"syncPartialOk\":0,\"syncPartialErr\":0,"
+                + "\"replicas\":[{\"id\":5,\"name\":\"127.0.0.1:6381\",\"state\":\"online\",\"ackOffset\":100,"
+                + "\"ackAgo\":1,\"sent\":120,\"outputBytes\":20504,\"waitingAck\":false}],"
+                + "\"master\":{\"host\":\"127.0.0.1\",\"port\":6379,\"state\":\"connected\",\"reploff\":120,"
+                + "\"lastIoAgo\":0,\"cachedReplid\":null,\"cachedReploff\":-1,\"downSeconds\":0},"
+                + "\"recent\":[{\"at\":1700000000000,\"kind\":\"full\",\"peer\":\"127.0.0.1:6379\","
+                + "\"detail\":\"+FULLRESYNC 0\",\"offset\":0}]}",
+                DashboardJson.replication(snapshot));
+    }
+
+    @Test
     @DisplayName("명령 이벤트 - 순번, 시각, 종류 포함")
     void serialisesCommand() {
         String json = DashboardJson.activity(List.of(record(7, new Event.CommandExecuted(3, "SET", "k v", 1234, "+OK"))), 0);

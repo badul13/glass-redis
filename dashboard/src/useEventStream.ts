@@ -14,6 +14,7 @@ import type {
   RdbSaveStarted,
   RdbSnapshot,
   RemovalReason,
+  ReplicationSnapshot,
 } from './types'
 
 /** 초과 시 오래된 줄부터 폐기 */
@@ -58,6 +59,7 @@ export interface Dashboard {
   rewriteFinished: AofRewriteFinished | null
   rdb: RdbSnapshot | null
   rdbSaves: RdbSave[]
+  replication: ReplicationSnapshot | null
 }
 
 const EMPTY: Dashboard = {
@@ -75,6 +77,7 @@ const EMPTY: Dashboard = {
   rewriteFinished: null,
   rdb: null,
   rdbSaves: [],
+  replication: null,
 }
 
 type Action =
@@ -83,6 +86,7 @@ type Action =
   | { type: 'keyspace'; snapshot: KeyspaceSnapshot }
   | { type: 'aof'; snapshot: AofSnapshot }
   | { type: 'rdb'; snapshot: RdbSnapshot }
+  | { type: 'replication'; snapshot: ReplicationSnapshot }
 
 function tail<T>(items: T[], limit: number): T[] {
   return items.length <= limit ? items : items.slice(items.length - limit)
@@ -101,6 +105,9 @@ function reduce(state: Dashboard, action: Action): Dashboard {
 
     case 'rdb':
       return { ...state, rdb: action.snapshot }
+
+    case 'replication':
+      return { ...state, replication: action.snapshot }
 
     case 'activity': {
       const { dropped, events } = action.batch
@@ -197,6 +204,9 @@ export function useEventStream(): Dashboard {
     })
     source.addEventListener('rdb', (event) => {
       dispatch({ type: 'rdb', snapshot: JSON.parse(event.data) as RdbSnapshot })
+    })
+    source.addEventListener('replication', (event) => {
+      dispatch({ type: 'replication', snapshot: JSON.parse(event.data) as ReplicationSnapshot })
     })
 
     return () => source.close()

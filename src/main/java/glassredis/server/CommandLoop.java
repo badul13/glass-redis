@@ -9,6 +9,7 @@ import glassredis.command.Propagation;
 import glassredis.command.impl.PingCommand;
 import glassredis.observe.AofSnapshot;
 import glassredis.observe.RdbSnapshot;
+import glassredis.observe.ReplicationSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
@@ -345,6 +346,13 @@ final class CommandLoop implements AutoCloseable {
         return result;
     }
 
+    /** 대시보드용 복제 상태 - 실행 스레드에서 */
+    CompletableFuture<ReplicationSnapshot> replicationSnapshot() {
+        CompletableFuture<ReplicationSnapshot> result = new CompletableFuture<>();
+        queue.add(() -> result.complete(master.view()));
+        return result;
+    }
+
     /**
      * 저장 없이 멈춤 - 비정상 종료와 같음
      * 큐에 남은 future는 미완료로 방치
@@ -518,7 +526,8 @@ final class CommandLoop implements AutoCloseable {
             }
         }
 
-        if (events.enabled()) {
+        // 레플리카가 보내는 1초 ACK 는 스트림에서 뺌 - 복제 패널의 ACK 시각으로 보임
+        if (events.enabled() && !client.isReplica()) {
             events.publish(Event.command(connectionId, command.name(), args, System.nanoTime() - startNanos, reply));
         }
         return reply;

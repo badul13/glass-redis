@@ -140,6 +140,21 @@ export interface RdbSaveFailed extends Stamped {
 
 export type RdbEvent = RdbSaveStarted | RdbSaveFinished | RdbSaveFailed
 
+/** sync 요청, full·partial 동기화, rdb 전송, online, dropped 끊김, backlog, id 변경, link 마스터 연결 */
+export type ReplicationKind = 'sync' | 'full' | 'partial' | 'rdb' | 'online' | 'dropped' | 'backlog' | 'id' | 'link'
+
+/** 복제 흐름 한 단계 - 서버가 최근 40개를 스냅샷에 실음 */
+export interface ReplicationEntry {
+  /** 에포크 ms */
+  at: number
+  kind: ReplicationKind
+  /** 레플리카 이름 또는 마스터 주소, 없으면 "-" */
+  peer: string
+  detail: string
+  /** 그 시점의 master_repl_offset */
+  offset: number
+}
+
 export type ActivityEvent =
   | ClientConnected
   | ClientDisconnected
@@ -148,6 +163,54 @@ export type ActivityEvent =
   | ExpiryCycleCompleted
   | AofEvent
   | RdbEvent
+
+export interface ReplicaView {
+  id: number
+  name: string
+  /** wait_bgsave_start, wait_bgsave, send_bulk, online, rdb_transmitted */
+  state: string
+  ackOffset: number
+  ackAgo: number
+  /** 쓰기 스레드가 소켓에 쓴 위치 */
+  sent: number
+  outputBytes: number
+  /** 디스크리스 RDB 뒤 첫 ACK 대기 */
+  waitingAck: boolean
+}
+
+export interface MasterLinkView {
+  host: string
+  port: number
+  /** connect, connecting, handshake, sync, connected */
+  state: string
+  reploff: number
+  lastIoAgo: number
+  cachedReplid: string | null
+  cachedReploff: number
+  downSeconds: number
+}
+
+/** INFO replication 에 해당 - 0.5초마다 */
+export interface ReplicationSnapshot {
+  role: 'master' | 'replica'
+  replid: string
+  replid2: string
+  secondReplidOffset: number
+  offset: number
+  backlog: boolean
+  backlogSize: number
+  backlogFirstByte: number
+  backlogHistlen: number
+  backlogBlocks: number
+  bufferMemory: number
+  socketTransfer: boolean
+  syncFull: number
+  syncPartialOk: number
+  syncPartialErr: number
+  replicas: ReplicaView[]
+  master?: MasterLinkView
+  recent: ReplicationEntry[]
+}
 
 export interface ActivityBatch {
   /** 화면이 못 따라가 서버가 버린 개수 */

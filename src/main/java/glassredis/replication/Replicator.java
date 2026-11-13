@@ -4,6 +4,7 @@ import glassredis.command.Client;
 import glassredis.command.Errors;
 import glassredis.command.Numbers;
 import glassredis.command.Replication;
+import glassredis.observe.ReplicationSnapshot;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.RdbWriter;
 import glassredis.resp.RespReader;
@@ -354,6 +355,7 @@ public final class Replicator implements Replication {
 
         ReplicaLink slave = newLink(client);
         log("레플리카 %s 가 동기화를 요청했습니다", slave.name());
+        event("sync", slave.name(), psync ? "PSYNC " + text(argv.get(1)) + " " + text(argv.get(2)) : "SYNC");
 
         if (psync) {
             OptionalLong offset = Numbers.parseLong(argv.get(2));
@@ -385,6 +387,7 @@ public final class Replicator implements Replication {
             clearReplicationId2();
             buffer.createBacklog();
             log("복제 백로그를 만들었습니다. 새 복제 ID 는 '%s', '%s' 입니다", replid, replid2);
+            event("backlog", "-", "백로그 생성 · 새 복제 ID " + replid.substring(0, 8) + "…");
         }
 
         if (children.diskBgsaveActive()) {
@@ -469,9 +472,11 @@ public final class Replicator implements Replication {
                 if (!requestedId.equalsIgnoreCase(replid) && !requestedId.equalsIgnoreCase(replid2)) {
                     log("부분 동기화 거절: 복제 ID 불일치 (레플리카 요청 '%s', 내 ID '%s', '%s')",
                             requestedId, replid, replid2);
+                    event("partial", slave.name(), "거절 · 복제 ID 불일치");
                 } else {
                     log("부분 동기화 거절: 두 번째 ID 의 요청 오프셋 %d, 응할 수 있는 건 %d 까지",
                             offset, secondReplidOffset);
+                    event("partial", slave.name(), "거절 · 두 번째 ID 로는 " + secondReplidOffset + " 까지만");
                 }
             } else {
                 log("레플리카 %s 가 전체 동기화를 요청했습니다", slave.name());
@@ -481,6 +486,7 @@ public final class Replicator implements Replication {
         if (!buffer.hasBacklog() || offset < buffer.backlogOffset()
                 || offset > buffer.backlogOffset() + buffer.histlen()) {
             log("백로그가 모자라 레플리카 %s 와 부분 동기화할 수 없습니다 (요청 %d)", slave.name(), offset);
+            event("partial", slave.name(), "거절 · 백로그 범위 밖 (요청 " + offset + ")");
             if (offset > buffer.masterReplOffset()) {
                 log("경고: 레플리카 %s 가 마스터 오프셋보다 큰 오프셋으로 PSYNC 했습니다", slave.name());
             }
@@ -497,6 +503,7 @@ public final class Replicator implements Replication {
         long length = buffer.referenceFrom(slave, offset);
         log("레플리카 %s 의 부분 동기화를 받아들였습니다. 오프셋 %d 부터 백로그 %d 바이트를 보냅니다",
                 slave.name(), offset, length);
+        event("partial", slave.name(), "+CONTINUE · 오프셋 " + offset + " 부터 백로그 " + length + " 바이트");
         return true;
     }
 
@@ -505,6 +512,7 @@ public final class Replicator implements Replication {
      * SELECT 를 다시 내도록 slaveseldb 초기화
      */
     private void setupFullResync(ReplicaLink slave, long offset) {
+        event("full", slave.name(), "+FULLRESYNC " + offset + " · 이 뒤의 쓰기는 버퍼에 쌓음");
         slave.psyncInitialOffset = offset;
         slave.state = ReplicaLink.State.WAIT_BGSAVE_END;
         slave.streamFrom(offset);
@@ -519,6 +527,7 @@ public final class Replicator implements Replication {
         boolean socketTarget = (config.disklessSync() || (req & Client.REQ_RDB_MASK) != 0)
                 && (mincapa & Client.CAPA_EOF) != 0;
         log("복제용 BGSAVE 를 시작합니다. 대상: %s", socketTarget ? "레플리카 소켓" : "디스크");
+        event("rdb", "-", socketTarget ? "디스크리스 BGSAVE · RDB 를 소켓으로 바로" : "BGSAVE · dump.rdb 로 쓴 뒤 전송");
 
         boolean started = socketTarget ? saveToReplicaSockets(req) : children.startDiskBgsave();
         if (!started) {
@@ -604,14 +613,15 @@ public final class Replicator implements Replication {
             }
             if (!ok) {
                 log("동기화 실패: BGSAVE 가 실패했습니다");
-                free(slave);
+                free(slave, "BGSAVE 실패");
                 continue;
             }
             if (socket) {
                 log("레플리카 %s 로 RDB 를 소켓으로 다 보냈습니다. 스트림은 REPLCONF ACK 를 받은 뒤 시작합니다",
                         slave.name());
+                event("rdb", slave.name(), "디스크리스 RDB 전송 끝 · 첫 ACK 를 기다림");
                 if (!putOnline(slave)) {
-                    free(slave);
+                    free(slave, "RDB 만 받고 끝 (rdb-only)");
                     continue;
                 }
                 slave.startStreamOnAck = true;
@@ -623,7 +633,7 @@ public final class Replicator implements Replication {
                     size = channel.size();
                 } catch (IOException e) {
                     log("동기화 실패: BGSAVE 뒤 RDB 를 열 수 없습니다: %s", e.getMessage());
-                    free(slave);
+                    free(slave, "RDB 파일을 열 수 없음");
                     continue;
                 }
                 slave.state = ReplicaLink.State.SEND_BULK;
@@ -639,7 +649,7 @@ public final class Replicator implements Replication {
             return;
         }
         if (!putOnline(slave)) {
-            free(slave);
+            free(slave, "RDB 만 받고 끝 (rdb-only)");
             return;
         }
         startCommandStream(slave);
@@ -655,6 +665,7 @@ public final class Replicator implements Replication {
         slave.state = ReplicaLink.State.ONLINE;
         slave.ackTime = clock.getAsLong();
         log("레플리카 %s 와 동기화 성공", slave.name());
+        event("online", slave.name(), "온라인 · 오프셋 " + slave.queuedOffset + " 뒤부터 스트림");
         return true;
     }
 
@@ -713,7 +724,7 @@ public final class Replicator implements Replication {
                 }
                 if (now - slave.ackTime > config.timeout()) {
                     log("응답 없는 레플리카를 끊습니다 (스트리밍): %s", slave.name());
-                    free(slave);
+                    free(slave, "ACK 타임아웃");
                     continue;
                 }
             }
@@ -722,7 +733,7 @@ public final class Replicator implements Replication {
                 long started = slave.writer.writeStartedAt();
                 if (started != 0 && now - started > config.timeout()) {
                     log("응답 없는 레플리카를 끊습니다 (전체 동기화): %s", slave.name());
-                    free(slave);
+                    free(slave, "전체 동기화 쓰기 타임아웃");
                 }
             }
         }
@@ -735,6 +746,7 @@ public final class Replicator implements Replication {
                 clearReplicationId2();
                 buffer.freeBacklog();
                 log("레플리카 없이 %d초가 지나 복제 백로그를 해제했습니다", config.backlogTtl());
+                event("backlog", "-", "레플리카 없이 " + config.backlogTtl() + "초 · 백로그 해제, 새 복제 ID");
             }
         }
 
@@ -984,6 +996,7 @@ public final class Replicator implements Replication {
         link = new MasterLink(this, masterHost, masterPort, executor, clock, dir, config.timeout());
         replState = ReplState.CONNECTING;
         log("MASTER <-> REPLICA 동기화 시작");
+        event("link", masterHost + ":" + masterPort, "마스터에 접속 시작");
         link.start();
     }
 
@@ -1039,6 +1052,7 @@ public final class Replicator implements Replication {
             masterReplid = id;
             masterInitialOffset = offset;
             log("마스터에게서 전체 동기화: %s:%d", id, offset);
+            event("full", masterHost + ":" + masterPort, "+FULLRESYNC " + id.substring(0, 8) + "… " + offset + " · RDB 받는 중");
         }
         replState = ReplState.TRANSFER;
         return true;
@@ -1070,6 +1084,7 @@ public final class Replicator implements Replication {
             buffer.createBacklog();
         }
         log("MASTER <-> REPLICA 동기화: 성공");
+        event("online", masterHost + ":" + masterPort, "RDB 로드 끝 · 오프셋 " + master.reploff + " 부터 스트림 적용");
         // 디스크리스 RDB 는 첫 ACK 를 받아야 마스터가 스트림을 시작 - AOF 재시작보다 먼저 (FACK 없음)
         sendAck();
         host.afterSync();
@@ -1082,6 +1097,7 @@ public final class Replicator implements Replication {
             return null;
         }
         log("마스터와 부분 동기화 성공");
+        event("partial", masterHost + ":" + masterPort, "+CONTINUE · 오프셋 " + (cachedMaster.reploff() + 1) + " 부터 이어 받음");
         String id = cachedMaster.replid();
         if (newId != null && !newId.equals(id)) {
             log("마스터 복제 ID 가 %s 로 바뀌었습니다", newId);
@@ -1198,6 +1214,7 @@ public final class Replicator implements Replication {
         }
         if (master != null && master.link == from) {
             log("마스터와의 연결이 끊겼습니다");
+            event("link", masterHost + ":" + masterPort, "마스터 연결 끊김 · 상태를 캐시해 두고 다시 접속");
             freeMaster(true);
             return;
         }
@@ -1269,12 +1286,13 @@ public final class Replicator implements Replication {
         secondReplidOffset = buffer.masterReplOffset() + 1;
         changeReplicationId();
         log("두 번째 복제 ID 를 %s (오프셋 %d 까지 유효) 로, 새 복제 ID 는 %s", replid2, secondReplidOffset, replid);
+        event("id", masterHost == null ? "-" : masterHost + ":" + masterPort, "두 번째 ID " + replid2.substring(0, 8) + "… (오프셋 " + secondReplidOffset + " 까지) · 새 ID " + replid.substring(0, 8) + "…");
     }
 
     /** disconnectSlaves */
     private void disconnectSlaves() {
         for (ReplicaLink slave : List.copyOf(slaves)) {
-            free(slave);
+            free(slave, "마스터가 바뀌어 다시 동기화");
         }
     }
 
@@ -1283,7 +1301,7 @@ public final class Replicator implements Replication {
     /** 연결이 끊김 - 커넥션 스레드가 알림 */
     public void clientClosed(Client client) {
         if (client.replica() instanceof ReplicaLink slave) {
-            free(slave);
+            free(slave, "연결 끊김");
         }
     }
 
@@ -1298,14 +1316,14 @@ public final class Replicator implements Replication {
     public void replicaGeneratedReply(Client client, String command) {
         if (client.replica() instanceof ReplicaLink slave) {
             log("레플리카 %s 가 응답이 있는 명령 '%s' 를 보내 연결을 끊습니다", slave.name(), command);
-            free(slave);
+            free(slave, "응답 있는 명령을 보냄");
         }
     }
 
     /** 서버 종료 */
     public void close() {
         for (ReplicaLink slave : List.copyOf(slaves)) {
-            free(slave);
+            free(slave, "서버 종료");
         }
         if (link != null) {
             link.close();
@@ -1320,7 +1338,7 @@ public final class Replicator implements Replication {
         try {
             writer = new ReplicaWriter("glass-redis-replica-" + client.id(),
                     socket == null ? java.io.OutputStream.nullOutputStream() : socket.getOutputStream(),
-                    clock, client::close, () -> executor.accept(() -> free(holder[0])));
+                    clock, client::close, () -> executor.accept(() -> free(holder[0], "소켓 쓰기 실패")));
         } catch (IOException e) {
             throw new IllegalStateException("레플리카 소켓을 쓸 수 없음", e);
         }
@@ -1344,12 +1362,17 @@ public final class Replicator implements Replication {
         }
     }
 
-    /** freeClient 의 레플리카 부분 */
-    private void free(ReplicaLink slave) {
+    /**
+     * freeClient 의 레플리카 부분
+     *
+     * @param reason 화면에 남길 이유
+     */
+    private void free(ReplicaLink slave, String reason) {
         if (slave == null || slave.freed) {
             return;
         }
         slave.freed = true;
+        event("dropped", slave.name(), reason + " · 상태 " + stateName(slave));
         // 이 RDB 를 기다리는 레플리카가 더는 없으면 디스크 BGSAVE 중단 - save 규칙 있으면 파일이 중요하니 둠
         if (children.saveRulesEmpty() && slave.state == ReplicaLink.State.WAIT_BGSAVE_END
                 && children.diskBgsaveActive() && !anyOtherWaitingRdb(slave)) {
@@ -1358,6 +1381,66 @@ public final class Replicator implements Replication {
         detach(slave);
         slave.writer.stop();
         slave.client.close();
+    }
+
+    // ---------------------------------------------------------------- 관측
+
+    /** 복제 흐름 한 단계를 화면으로 */
+    private void event(String kind, String peer, String detail) {
+        // 화면을 늦게 열어도 흐름이 보이게 최근 것을 들고 있다가 스냅샷에 실음
+        recent.addLast(new ReplicationSnapshot.Entry(System.currentTimeMillis(), kind, peer, detail,
+                buffer.masterReplOffset()));
+        if (recent.size() > RECENT_EVENTS) {
+            recent.removeFirst();
+        }
+    }
+
+    /** 타임라인에 남길 개수 */
+    private static final int RECENT_EVENTS = 40;
+    private final java.util.ArrayDeque<ReplicationSnapshot.Entry> recent = new java.util.ArrayDeque<>();
+
+    /** INFO 의 slaveN state 이름 */
+    private static String stateName(ReplicaLink slave) {
+        return switch (slave.state) {
+            case WAIT_BGSAVE_START, WAIT_BGSAVE_END -> "wait_bgsave";
+            case SEND_BULK -> "send_bulk";
+            case ONLINE -> "online";
+            case RDB_TRANSMITTED -> "rdb_transmitted";
+        };
+    }
+
+    /** 대시보드용 - 실행 스레드에서 */
+    public ReplicationSnapshot view() {
+        long now = clock.getAsLong();
+        List<ReplicationSnapshot.Replica> replicas = new ArrayList<>();
+        for (ReplicaLink slave : slaves) {
+            replicas.add(new ReplicationSnapshot.Replica(slave.client.id(), slave.name(),
+                    slave.state == ReplicaLink.State.WAIT_BGSAVE_START ? "wait_bgsave_start" : stateName(slave),
+                    slave.ackOffset, now - slave.ackTime, slave.writer.written(), buffer.outputBufferUsage(slave),
+                    slave.startStreamOnAck));
+        }
+        ReplicationSnapshot.Master masterView = null;
+        if (masterHost != null) {
+            String state = switch (replState) {
+                case NONE -> "none";
+                case CONNECT -> "connect";
+                case CONNECTING -> "connecting";
+                case HANDSHAKE -> "handshake";
+                case TRANSFER -> "sync";
+                case CONNECTED -> "connected";
+            };
+            masterView = new ReplicationSnapshot.Master(masterHost, masterPort, state,
+                    master != null ? master.reploff : -1,
+                    master != null ? now - master.lastInteraction : (link != null ? now - link.lastIo() : -1),
+                    cachedMaster != null ? cachedMaster.replid() : null,
+                    cachedMaster != null ? cachedMaster.reploff() : -1,
+                    replState == ReplState.CONNECTED || downSince == 0 ? 0 : now - downSince);
+        }
+        return new ReplicationSnapshot(masterHost == null ? "master" : "replica", replid, replid2,
+                secondReplidOffset, buffer.masterReplOffset(), buffer.hasBacklog(), config.backlogSize(),
+                buffer.hasBacklog() ? buffer.backlogOffset() : 0, buffer.histlen(), buffer.blockCount(),
+                buffer.memory(), socketTransfer != null, replicas, masterView,
+                statSyncFull, statSyncPartialOk, statSyncPartialErr, List.copyOf(recent));
     }
 
     /** anyOtherSlaveWaitRdb */
@@ -1394,7 +1477,7 @@ public final class Replicator implements Replication {
             log("레플리카 %s 의 출력 버퍼가 한도를 넘어 곧 끊습니다", slave.name());
             // 버퍼 순회 중이라 끊기는 나중에 (freeClientAsync)
             slave.closeAsap = true;
-            executor.accept(() -> free(slave));
+            executor.accept(() -> free(slave, "출력 버퍼 한도 초과"));
         }
     }
 

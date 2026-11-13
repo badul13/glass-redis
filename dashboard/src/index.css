@@ -1103,3 +1103,213 @@ table.keys td.type .encoding {
 .rdb-foot .error {
   color: var(--error);
 }
+
+/* 복제 - 오프셋 자 위의 백로그 창과 레플리카 ACK 점 */
+
+.repl {
+  --window: #6fa8dc;
+  --ack: var(--ok);
+}
+
+.repl .label {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.repl .dim {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+.repl code {
+  font-size: 11.5px;
+}
+
+.repl-ids,
+.repl-link {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  display: grid;
+  gap: 2px;
+}
+
+.repl-link .badge {
+  margin-left: 8px;
+}
+
+.repl-link.down {
+  background: rgba(240, 138, 122, 0.06);
+}
+
+.state-connected,
+.state-online {
+  color: var(--ok);
+}
+
+.state-connect,
+.state-connecting,
+.state-handshake {
+  color: var(--active);
+}
+
+.state-sync,
+.state-wait_bgsave_start,
+.state-wait_bgsave,
+.state-send_bulk {
+  color: var(--lazy);
+}
+
+.state-rdb_transmitted {
+  color: var(--dim);
+}
+
+.repl-ruler {
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.repl-ruler .track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: #1d2327;
+}
+
+.repl-ruler .window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--window) 45%, transparent);
+  border: 1px solid var(--window);
+}
+
+.repl-ruler .dot {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+}
+
+.repl-ruler .dot.inside {
+  background: var(--ack);
+}
+
+.repl-ruler .dot.outside {
+  background: var(--error);
+}
+
+.repl-ruler .scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.repl-replicas {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.repl-replicas th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--faint);
+  padding: 6px 14px 4px;
+}
+
+.repl-replicas td {
+  padding: 4px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.repl-replicas .num {
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.repl-replicas .name {
+  font-family: var(--mono);
+}
+
+.repl-events {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+}
+
+.repl-events li {
+  display: grid;
+  grid-template-columns: 88px 42px minmax(0, 0.8fr) minmax(0, 2fr) auto;
+  gap: 8px;
+  padding: 2px 14px;
+  align-items: baseline;
+}
+
+.repl-events .time,
+.repl-events .offset {
+  font-family: var(--mono);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.repl-events .peer {
+  font-family: var(--mono);
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repl-events .kind {
+  font-weight: 600;
+}
+
+.repl-events .kind-full .kind,
+.repl-events .kind-rdb .kind {
+  color: var(--lazy);
+}
+
+.repl-events .kind-partial .kind,
+.repl-events .kind-online .kind {
+  color: var(--ok);
+}
+
+.repl-events .kind-dropped .kind {
+  color: var(--error);
+}
+
+.repl-events .kind-id .kind,
+.repl-events .kind-backlog .kind {
+  color: var(--deleted);
+}
+
+.repl-events .kind-sync .kind,
+.repl-events .kind-link .kind {
+  color: var(--active);
+}
+
+.repl-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.repl-foot .busy {
+  color: var(--lazy);
+}

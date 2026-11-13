@@ -67,6 +67,7 @@ public final class DashboardServer implements AutoCloseable {
 
     /** RDB 상태 - 기본은 보내지 않음 */
     private Supplier<RdbSnapshot> rdb = () -> null;
+    private Supplier<ReplicationSnapshot> replication = () -> null;
 
     private HttpServer http;
     private ExecutorService handlers;
@@ -98,6 +99,12 @@ public final class DashboardServer implements AutoCloseable {
     /** 기동 전 호출 - AOF 상태와 같은 주기로 RDB 상태 전송 */
     public DashboardServer withRdb(Supplier<RdbSnapshot> rdbSnapshot) {
         this.rdb = rdbSnapshot;
+        return this;
+    }
+
+    /** 기동 전 호출 - 같은 주기로 복제 상태 전송 */
+    public DashboardServer withReplication(Supplier<ReplicationSnapshot> replicationSnapshot) {
+        this.replication = replicationSnapshot;
         return this;
     }
 
@@ -178,6 +185,10 @@ public final class DashboardServer implements AutoCloseable {
                 RdbSnapshot rdbSnapshot = rdb.get();
                 if (rdbSnapshot != null) {
                     send(body, "rdb", DashboardJson.rdb(rdbSnapshot));
+                }
+                ReplicationSnapshot replicationSnapshot = replication.get();
+                if (replicationSnapshot != null) {
+                    send(body, "replication", DashboardJson.replication(replicationSnapshot));
                 }
             }
             body.flush();

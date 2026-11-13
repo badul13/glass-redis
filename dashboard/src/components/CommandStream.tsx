@@ -70,7 +70,10 @@ function Body({ event }: { event: ActivityEvent }) {
     case 'command':
       return (
         <>
-          <span className="conn">#{event.connection}</span>
+          {/* -1 - 레플리카가 마스터 스트림을 실행하는 마스터 클라이언트 */}
+          <span className="conn" title={event.connection === -1 ? '마스터가 보낸 복제 스트림' : undefined}>
+            {event.connection === -1 ? '마스터' : '#' + event.connection}
+          </span>
           <span className="command">
             <b>{event.name}</b> {event.args}
           </span>

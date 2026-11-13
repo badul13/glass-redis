@@ -148,6 +148,74 @@ final class DashboardJson {
         return out.toString();
     }
 
+    static String replication(ReplicationSnapshot snapshot) {
+        StringBuilder out = new StringBuilder(512);
+        out.append('{');
+        Json.field(out, "role", snapshot.role());
+        Json.field(out, "replid", snapshot.replid());
+        Json.field(out, "replid2", snapshot.replid2());
+        Json.field(out, "secondReplidOffset", snapshot.secondReplidOffset());
+        Json.field(out, "offset", snapshot.offset());
+        Json.field(out, "backlog", snapshot.backlog());
+        Json.field(out, "backlogSize", snapshot.backlogSize());
+        Json.field(out, "backlogFirstByte", snapshot.backlogFirstByte());
+        Json.field(out, "backlogHistlen", snapshot.backlogHistlen());
+        Json.field(out, "backlogBlocks", snapshot.backlogBlocks());
+        Json.field(out, "bufferMemory", snapshot.bufferMemory());
+        Json.field(out, "socketTransfer", snapshot.socketTransfer());
+        Json.field(out, "syncFull", snapshot.syncFull());
+        Json.field(out, "syncPartialOk", snapshot.syncPartialOk());
+        Json.field(out, "syncPartialErr", snapshot.syncPartialErr());
+        Json.name(out, "replicas");
+        out.append('[');
+        for (ReplicationSnapshot.Replica replica : snapshot.replicas()) {
+            if (out.charAt(out.length() - 1) != '[') {
+                out.append(',');
+            }
+            out.append('{');
+            Json.field(out, "id", replica.id());
+            Json.field(out, "name", replica.name());
+            Json.field(out, "state", replica.state());
+            Json.field(out, "ackOffset", replica.ackOffset());
+            Json.field(out, "ackAgo", replica.ackAgo());
+            Json.field(out, "sent", replica.sent());
+            Json.field(out, "outputBytes", replica.outputBytes());
+            Json.field(out, "waitingAck", replica.waitingAck());
+            out.append('}');
+        }
+        out.append(']');
+        ReplicationSnapshot.Master master = snapshot.master();
+        if (master != null) {
+            Json.name(out, "master");
+            out.append('{');
+            Json.field(out, "host", master.host());
+            Json.field(out, "port", master.port());
+            Json.field(out, "state", master.state());
+            Json.field(out, "reploff", master.reploff());
+            Json.field(out, "lastIoAgo", master.lastIoAgo());
+            Json.field(out, "cachedReplid", master.cachedReplid());
+            Json.field(out, "cachedReploff", master.cachedReploff());
+            Json.field(out, "downSeconds", master.downSeconds());
+            out.append('}');
+        }
+        Json.name(out, "recent");
+        out.append('[');
+        for (ReplicationSnapshot.Entry entry : snapshot.recent()) {
+            if (out.charAt(out.length() - 1) != '[') {
+                out.append(',');
+            }
+            out.append('{');
+            Json.field(out, "at", entry.at());
+            Json.field(out, "kind", entry.kind());
+            Json.field(out, "peer", entry.peer());
+            Json.field(out, "detail", entry.detail());
+            Json.field(out, "offset", entry.offset());
+            out.append('}');
+        }
+        out.append("]}");
+        return out.toString();
+    }
+
     private static void appendStrings(StringBuilder out, List<String> texts) {
         out.append('[');
         for (int i = 0; i < texts.size(); i++) {

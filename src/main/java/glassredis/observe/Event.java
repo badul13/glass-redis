@@ -97,7 +97,6 @@ public sealed interface Event {
 
     record RdbSaveFailed(String trigger, boolean background, String reason) implements Event {
     }
-
     enum RemovalReason {
         /** 읽기 시 만료 확인 후 삭제 */
         LAZY_EXPIRED,

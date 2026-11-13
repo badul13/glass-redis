@@ -4,6 +4,7 @@ import { CommandStream } from './components/CommandStream'
 import { ExpiryPanel } from './components/ExpiryPanel'
 import { KeyspaceView } from './components/KeyspaceView'
 import { RdbPanel } from './components/RdbPanel'
+import { ReplicationPanel } from './components/ReplicationPanel'
 import { SortedSetView } from './components/SortedSetView'
 import { useEventStream } from './useEventStream'
 import { useSortedSet } from './useSortedSet'
@@ -43,6 +44,7 @@ export default function App() {
           <KeyspaceView snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
           <ExpiryPanel {...dashboard} />
           <RdbPanel {...dashboard} />
+          <ReplicationPanel {...dashboard} />
         </div>
       </main>
 

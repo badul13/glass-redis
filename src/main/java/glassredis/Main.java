@@ -141,7 +141,8 @@ public final class Main {
     /** 대시보드 기동 실패 시 서버 유지 - 경고만 출력 */
     private static DashboardServer startDashboard(String bind, int port, EventHub events, RedisServer server) {
         DashboardServer dashboard = new DashboardServer(bind, port, events, server::keyspaceSnapshot,
-                server::sortedSetSnapshot).withAof(server::aofSnapshot).withRdb(server::rdbSnapshot);
+                server::sortedSetSnapshot).withAof(server::aofSnapshot).withRdb(server::rdbSnapshot)
+                .withReplication(server::replicationSnapshot);
         try {
             dashboard.start();
             System.out.printf("[glass-redis] 대시보드: http://%s:%d%n", bind, dashboard.port());
