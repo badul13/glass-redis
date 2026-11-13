@@ -23,7 +23,15 @@ public interface Replication {
         public RespValue role() {
             return new RespValue.Err("ERR replication is not available");
         }
+
+        @Override
+        public RespValue replicaof(Client client, List<byte[]> args) {
+            return new RespValue.Err("ERR replication is not available");
+        }
     };
+
+    /** REPLICAOF <host> <port> | NO ONE - 이름 제외 인자 2개 */
+    RespValue replicaof(Client client, List<byte[]> args);
 
     /** REPLCONF <option> <value> ... - 이름 제외 인자 */
     RespValue replconf(Client client, List<byte[]> args);

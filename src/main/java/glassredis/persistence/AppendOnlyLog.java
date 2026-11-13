@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * AOF 기록·복구·재작성 - aof.c
@@ -104,6 +105,23 @@ public final class AppendOnlyLog implements AutoCloseable {
     private final AtomicLong syncedOffset = new AtomicLong();
     private final AtomicBoolean fsyncInProgress = new AtomicBoolean();
 
+    /** server.master_repl_offset */
+    private LongSupplier replOffset = () -> 0;
+    /** fsynced_reploff_pending - fsync 스레드가 씀 */
+    private final AtomicLong fsyncedReploffPending = new AtomicLong();
+    /** fsynced_reploff - AOF 켜져 있으면 0 부터, 꺼져 있으면 -1 */
+    private long fsyncedReploff;
+    /** AOF_WAIT_REWRITE - 동기화 뒤 첫 재작성 대기 */
+    private boolean waitRewrite;
+    /** AOF_OFF 상태 - 레플리카 전체 동기화 중 */
+    private boolean suspended;
+    /** aof_last_fsync - 초 단위, everysec 판정 */
+    private long lastFsyncSecond;
+    /** aof_flush_postponed_start - fsync 진행 중이라 쓰기를 미룬 시각 (초), 0 이면 안 미룸 */
+    private long flushPostponedStart;
+    /** aof_delayed_fsync - 2초 넘게 밀려 fsync 를 안 기다리고 쓴 횟수 */
+    private long delayedFsync;
+
     /** bio 스레드 - fsync와 옛 파일 닫기 */
     private final ExecutorService fsyncThread = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().name("glass-redis-aof-fsync").daemon(true).factory());
@@ -126,6 +144,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         this.config = Objects.requireNonNull(config, "config");
         this.aofDir = config.dir().resolve(DIRNAME);
         this.events = Objects.requireNonNull(events, "events");
+        this.fsyncedReploff = config.enabled() ? 0 : -1;
     }
 
     public boolean enabled() {
@@ -206,7 +225,7 @@ public final class AppendOnlyLog implements AutoCloseable {
      * DB가 바뀌면 SELECT 먼저, MULTI·EXEC는 SELECT 없이
      */
     public void feed(List<byte[]> argv) {
-        if (!config.enabled()) {
+        if (!config.enabled() || suspended) {
             return;
         }
         if (selectedDb != 0) {
@@ -225,7 +244,7 @@ public final class AppendOnlyLog implements AutoCloseable {
      * @param dbid -1 이면 SELECT 없이 (MULTI·EXEC)
      */
     public void feed(int dbid, List<byte[]> argv) {
-        if (!config.enabled()) {
+        if (!config.enabled() || suspended) {
             return;
         }
         if (dbid < 0) {
@@ -237,7 +256,7 @@ public final class AppendOnlyLog implements AutoCloseable {
 
     /** 명령 하나가 여러 전파를 낳으면 트랜잭션으로 - propagatePendingCommands */
     public void feedAll(List<List<byte[]>> commands) {
-        if (!config.enabled() || commands.isEmpty()) {
+        if (!config.enabled() || suspended || commands.isEmpty()) {
             return;
         }
         boolean transaction = commands.size() > 1;
@@ -261,21 +280,50 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
     }
 
+    /** beforeSleep - flushAppendOnlyFile(0) */
+    public void flush() {
+        flush(false);
+    }
+
+    /** serverCron - fsync 가 늦어 미룬 쓰기가 있으면 다시 시도 */
+    public void cronFlush() {
+        if (flushPostponedStart != 0) {
+            flush(false);
+        }
+    }
+
     /**
-     * beforeSleep - 버퍼를 OS로 write, 정책에 따라 fsync (flushAppendOnlyFile)
+     * 버퍼를 OS로 write, 정책에 따라 fsync (flushAppendOnlyFile)
+     * everysec 은 초가 바뀌었을 때 fsync 를 맡김 (unixtime > aof_last_fsync)
+     * fsync 가 아직 진행 중이면 write 자체를 최대 2초 미룸 - force 면 바로
      * 쓰기 실패 시 버퍼 유지 후 다음 번에 재시도
      */
-    public void flush() {
+    public void flush(boolean force) {
         if (channel == null) {
             return;
         }
+        long now = System.currentTimeMillis() / 1000;
+        boolean syncInProgress = false;
         if (buffer.size() == 0) {
-            // 쓸 것이 없어도 확정 안 된 바이트가 있으면 1초 주기 fsync
+            // 쓸 것이 없어도 확정 안 된 바이트가 있으면 초가 바뀔 때 fsync
             if (config.fsync() == FsyncPolicy.EVERYSEC && lastIncrFsyncOffset != lastIncrSize
-                    && System.currentTimeMillis() - lastFsyncMillis >= 1000) {
-                scheduleFsync();
+                    && now > lastFsyncSecond && !fsyncInProgress.get()) {
+                tryFsync(now, false);
             }
             return;
+        }
+        if (config.fsync() == FsyncPolicy.EVERYSEC) {
+            syncInProgress = fsyncInProgress.get();
+        }
+        if (config.fsync() == FsyncPolicy.EVERYSEC && !force && syncInProgress) {
+            if (flushPostponedStart == 0) {
+                flushPostponedStart = now;
+                return;
+            } else if (now - flushPostponedStart < 2) {
+                return;
+            }
+            // 2초 넘게 밀림 - fsync 를 기다리지 않고 씀 (aof_delayed_fsync)
+            delayedFsync++;
         }
         byte[] bytes = buffer.toByteArray();
         try {
@@ -288,13 +336,18 @@ public final class AppendOnlyLog implements AutoCloseable {
             return;
         }
         buffer.reset();
+        flushPostponedStart = 0;
         currentSize += bytes.length;
         lastIncrSize += bytes.length;
         if (events.enabled()) {
             events.publish(Event.aofWritten(bufferedCommands, bytes.length, channelName, lastIncrSize, currentSize));
         }
         bufferedCommands.clear();
+        tryFsync(now, syncInProgress);
+    }
 
+    /** try_fsync - always 는 바로, everysec 은 초가 바뀌었고 진행 중인 fsync 가 없을 때 맡김 */
+    private void tryFsync(long now, boolean syncInProgress) {
         switch (config.fsync()) {
             case ALWAYS -> {
                 long start = System.nanoTime();
@@ -306,12 +359,17 @@ public final class AppendOnlyLog implements AutoCloseable {
                 }
                 lastIncrFsyncOffset = lastIncrSize;
                 syncedOffset.set(lastIncrSize);
+                lastFsyncSecond = now;
                 lastFsyncMillis = System.currentTimeMillis();
+                fsyncedReploffPending.set(replOffset.getAsLong());
                 publishFsync(channelName, lastIncrSize, System.nanoTime() - start);
             }
             case EVERYSEC -> {
-                if (System.currentTimeMillis() - lastFsyncMillis >= 1000) {
-                    scheduleFsync();
+                if (now > lastFsyncSecond) {
+                    if (!syncInProgress) {
+                        scheduleFsync();
+                    }
+                    lastFsyncSecond = now;
                 }
             }
             case NO -> {
@@ -320,7 +378,65 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
     }
 
-    /** aof_background_fsync - 진행 중이면 이번 회차 건너뜀 */
+    /** server.master_repl_offset - fsync 된 복제 위치 기록용 */
+    public void replOffset(LongSupplier supplier) {
+        replOffset = supplier;
+    }
+
+    /**
+     * beforeSleep - fsync 스레드가 남긴 위치를 확정 (fsynced_reploff)
+     * 동기화 뒤 첫 재작성 중이면 아직 디스크 보장이 없어 그대로
+     */
+    public void publishFsyncedReploff() {
+        if (config.enabled() && fsyncedReploff != -1 && !waitRewrite) {
+            fsyncedReploff = fsyncedReploffPending.get();
+        }
+    }
+
+    /** REPLCONF ACK 의 FACK - AOF 꺼져 있으면 -1 (보내지 않음) */
+    public long fsyncedReploff() {
+        return fsyncedReploff;
+    }
+
+    /** stopAppendOnly - 레플리카 전체 동기화 동안 기록 멈춤 (버퍼는 지금 씀) */
+    public void suspend() {
+        if (!config.enabled()) {
+            return;
+        }
+        flush(true);
+        suspended = true;
+        // AOF_OFF - ACK 에 FACK 안 붙음
+        fsyncedReploff = -1;
+        fsyncedReploffPending.set(0);
+    }
+
+    public boolean suspended() {
+        return suspended;
+    }
+
+    /**
+     * restartAOFAfterSYNC → startAppendOnly - 새 데이터로 재작성, 끝날 때까지 FACK 는 0
+     *
+     * @return 재작성 시작 실패 사유, 다른 자식 작업 중이라 예약했거나 시작했으면 null
+     */
+    public String resumeAfterSync(Keyspace keyspace, boolean otherChildActive) {
+        if (!config.enabled()) {
+            return null;
+        }
+        suspended = false;
+        selectedDb = -1;
+        fsyncedReploffPending.set(replOffset.getAsLong());
+        fsyncedReploff = 0;
+        waitRewrite = true;
+        lastFsyncSecond = System.currentTimeMillis() / 1000;
+        if (otherChildActive) {
+            rewriteScheduled = true;
+            return null;
+        }
+        return rewriteInBackground(keyspace, "레플리카 동기화");
+    }
+
+    /** aof_background_fsync - 호출하는 쪽이 진행 중 아님을 확인 */
     private void scheduleFsync() {
         lastFsyncMillis = System.currentTimeMillis();
         if (!fsyncInProgress.compareAndSet(false, true)) {
@@ -330,11 +446,14 @@ public final class AppendOnlyLog implements AutoCloseable {
         String name = channelName;
         long offset = lastIncrSize;
         lastIncrFsyncOffset = offset;
+        // bioCreateFsyncJob(fd, master_repl_offset) - fsync 가 끝나면 이 복제 위치까지 디스크에 있음
+        long reploff = replOffset.getAsLong();
         fsyncThread.execute(() -> {
             long start = System.nanoTime();
             try {
                 target.force(false);
                 syncedOffset.accumulateAndGet(offset, Math::max);
+                fsyncedReploffPending.set(reploff);
                 publishFsync(name, offset, System.nanoTime() - start);
             } catch (IOException e) {
                 System.err.println("[glass-redis] AOF fsync 실패: " + e.getMessage());
@@ -398,7 +517,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         try {
             Files.createDirectories(aofDir);
             selectedDb = -1;
-            flush();
+            flush(true);
             openNewIncr();
         } catch (IOException e) {
             publishFailure("새 incr 파일을 열지 못함: " + e.getMessage());
@@ -462,6 +581,7 @@ public final class AppendOnlyLog implements AutoCloseable {
                 }
             });
             lastFsyncMillis = System.currentTimeMillis();
+            lastFsyncSecond = lastFsyncMillis / 1000;
         }
         channel = opened;
         channelName = name;
@@ -505,6 +625,11 @@ public final class AppendOnlyLog implements AutoCloseable {
         if (config.enabled()) {
             currentSize = baseBytes + lastIncrSize;
             rewriteBaseSize = currentSize;
+        }
+        if (waitRewrite) {
+            // AOF_WAIT_REWRITE → AOF_ON - 그사이 fsync 스레드가 갱신했을 수 있는 위치로
+            waitRewrite = false;
+            fsyncedReploff = fsyncedReploffPending.get();
         }
 
         // aofDelHistoryFiles
@@ -573,7 +698,7 @@ public final class AppendOnlyLog implements AutoCloseable {
     /** 종료 - 남은 버퍼 write 후 fsync (prepareForShutdown) */
     @Override
     public void close() {
-        flush();
+        flush(true);
         rewriteThread.shutdownNow();
         fsyncThread.shutdown();
         try {

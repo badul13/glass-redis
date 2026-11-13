@@ -93,6 +93,35 @@ final class ReplicationBuffer {
         return masterReplOffset;
     }
 
+    /** 레플리카가 마스터 위치를 이어받음 - 백로그 없을 때만 (전체 동기화 직후, 기동 복구) */
+    void setMasterReplOffset(long offset) {
+        if (backlog) {
+            throw new IllegalStateException("백로그가 있는 동안엔 오프셋을 옮길 수 없음");
+        }
+        masterReplOffset = offset;
+    }
+
+    /**
+     * rebaseReplicationBuffer - 기동 복구에서 RDB 의 repl-offset 을 기준으로
+     * 로드하며 쌓은 DEL 블록까지 같이 밀어 올림
+     */
+    void rebase(long base) {
+        masterReplOffset += base;
+        List<Block> rebased = new ArrayList<>(blocks.size());
+        for (Block block : blocks) {
+            Block moved = new Block(block.id, block.replOffset + base, block.size());
+            System.arraycopy(block.buf, 0, moved.buf, 0, block.used);
+            moved.used = block.used;
+            moved.refcount = block.refcount;
+            rebased.add(moved);
+        }
+        int refIndex = backlogRef == null ? -1 : blocks.indexOf(backlogRef);
+        blocks.clear();
+        blocks.addAll(rebased);
+        backlogRef = refIndex < 0 ? null : blocks.get(refIndex);
+        backlogOffset = masterReplOffset - histlen + 1;
+    }
+
     /** 백로그 없는 상태의 전파 - AOF 만 켜져 있을 때 명령마다 1 (replicationFeedSlaves) */
     void advanceWithoutBacklog() {
         masterReplOffset++;

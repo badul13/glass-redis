@@ -100,6 +100,10 @@ final class Connection implements Runnable {
                 }
                 client.touch(now());
                 if (argv.isEmpty()) {
+                    // 빈 줄 - 레플리카가 보낸 것이면 살아 있다는 신호 (processInlineBuffer)
+                    if (client.isReplica()) {
+                        commandLoop.replicaNewline(client);
+                    }
                     continue;
                 }
                 String name = new String(argv.get(0), StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);

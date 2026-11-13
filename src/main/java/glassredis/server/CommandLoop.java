@@ -2,6 +2,7 @@ package glassredis.server;
 
 import glassredis.command.Client;
 import glassredis.command.Command;
+import glassredis.command.CommandRegistry;
 import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.command.Propagation;
@@ -11,14 +12,18 @@ import glassredis.observe.RdbSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
-import glassredis.replication.ReplicationMaster;
+import glassredis.replication.Replicator;
 import glassredis.resp.RespValue;
 import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -75,10 +80,25 @@ final class CommandLoop implements AutoCloseable {
     private final Persistence persistence;
 
     /** 마스터 쪽 복제 */
-    private final ReplicationMaster master;
+    private final Replicator master;
 
     /** server.cronloops - 1초 주기 작업 판단 */
     private long cronLoops;
+
+    /** 레플리카가 받은 RDB 를 둘 곳 - null 이면 받은 임시 파일에서 바로 */
+    private final Snapshot snapshot;
+
+    /** 마스터 스트림의 명령 이름 찾기 */
+    private CommandRegistry registry = CommandRegistry.withBuiltins();
+
+    /** REPLCONF listening-port 로 알릴 포트 */
+    private volatile int port;
+
+    /** 실행 단위 안의 전파 - null 이면 명령마다 바로 (also_propagate 를 단위 끝에 한꺼번에) */
+    private List<List<byte[]>> unit;
+
+    private static final RespValue READONLY =
+            new RespValue.Err("READONLY You can't write against a read only replica.");
 
     /** 실행했지만 아직 안 보낸 응답 - AOF write 뒤 전달 (beforeSleep의 handleClientsWithPendingWrites) */
     private final List<Runnable> pendingReplies = new ArrayList<>();
@@ -102,15 +122,15 @@ final class CommandLoop implements AutoCloseable {
      * @param snapshot null이면 SAVE·BGSAVE 실패
      */
     CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Snapshot snapshot, Runnable onFatalError) {
-        this(keyspace, events, aof, snapshot, ReplicationMaster.Config.defaults(), onFatalError);
+        this(keyspace, events, aof, snapshot, Replicator.Config.defaults(), onFatalError);
     }
 
     /** @param replication 복제 설정 */
     CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Snapshot snapshot,
-                ReplicationMaster.Config replication, Runnable onFatalError) {
+                Replicator.Config replication, Runnable onFatalError) {
         this.aof = aof;
         this.persistence = new Persistence(keyspace, aof, snapshot);
-        this.master = new ReplicationMaster(replication, keyspace, persistence, queue::add,
+        this.master = new Replicator(replication, keyspace, persistence, queue::add,
                 () -> System.currentTimeMillis() / 1000);
         persistence.replication(master);
         if (snapshot != null) {
@@ -118,6 +138,9 @@ final class CommandLoop implements AutoCloseable {
             snapshot.replInfo(master::saveInfo);
         }
         this.context = new Context(keyspace, new Propagation(), persistence, master);
+        this.snapshot = snapshot;
+        master.host(new Host());
+        aof.replOffset(master::masterReplOffset);
         this.events = events;
         // 만료 삭제는 DEL로 전파 - 명령 중이면 그 명령과 묶고, 주기적 만료면 단독
         keyspace.setExpiredListener(key -> {
@@ -130,6 +153,104 @@ final class CommandLoop implements AutoCloseable {
         });
         this.activeExpire = new ActiveExpireCycle(keyspace, events);
         this.onFatalError = onFatalError;
+    }
+
+    void registry(CommandRegistry registry) {
+        this.registry = registry;
+    }
+
+    void port(int port) {
+        this.port = port;
+    }
+
+    /** 복제 상태 - 기동 시 replicaof·복구 정보 반영용, start() 전에만 */
+    Replicator replicator() {
+        return master;
+    }
+
+    /** 레플리카 연결에서 온 빈 줄 - RDB 로드 중인 레플리카가 살아 있다는 신호 */
+    void replicaNewline(Client client) {
+        queue.add(() -> master.replicaNewline(client));
+    }
+
+    /** 레플리카일 때 실행 스레드가 해 주는 일 */
+    private final class Host implements Replicator.ReplicaHost {
+
+        @Override
+        public RespValue executeFromMaster(Client client, List<byte[]> argv) {
+            String name = new String(argv.get(0), StandardCharsets.US_ASCII);
+            Command command = registry.find(name);
+            if (command == null) {
+                return Errors.unknownCommand(argv.get(0), argv.subList(1, argv.size()));
+            }
+            return execute(command, argv, client);
+        }
+
+        @Override
+        public void beginUnit() {
+            unit = new ArrayList<>();
+        }
+
+        @Override
+        public void endUnit() {
+            List<List<byte[]>> collected = unit;
+            unit = null;
+            propagate(collected);
+        }
+
+        @Override
+        public String loadFromMaster(Path received) {
+            Keyspace keyspace = context.keyspace();
+            // stopAppendOnly - 비우는 동안의 DEL 등은 기록 안 함, 끝나면 재작성으로 새로
+            aof.suspend();
+            log("MASTER <-> REPLICA 동기화: 이전 데이터를 비웁니다");
+            keyspace.clear();
+            Path target = snapshot != null ? snapshot.file() : received;
+            try {
+                if (!target.equals(received)) {
+                    Files.move(received, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (IOException e) {
+                return "받은 RDB 를 " + target + " 로 옮기지 못함: " + e.getMessage();
+            }
+            log("MASTER <-> REPLICA 동기화: 메모리로 로드합니다");
+            RdbLoader.Result loaded = snapshot != null
+                    ? snapshot.load(keyspace, RdbLoader.Options.REPLICA)
+                    : RdbLoader.load(target, keyspace, RdbLoader.Options.REPLICA);
+            if (snapshot == null) {
+                try {
+                    Files.deleteIfExists(target);
+                } catch (IOException ignored) {
+                    // 임시 파일 - 다음 동기화에 영향 없음
+                }
+            }
+            if (loaded.status() != RdbLoader.Status.OK) {
+                keyspace.clear();
+                return loaded.error();
+            }
+            log("RDB 로드 완료, 키 %d개 (redis-ver %s)", loaded.keys(), loaded.createdBy());
+            return null;
+        }
+
+        @Override
+        public void afterSync() {
+            if (aof.suspended()) {
+                String failure = aof.resumeAfterSync(context.keyspace(), persistence.childActive());
+                if (failure != null) {
+                    log("동기화 뒤 AOF 다시 시작 실패: %s", failure);
+                }
+            }
+        }
+
+        @Override
+        public long fsyncedReploff() {
+            return aof.fsyncedReploff();
+        }
+
+        @Override
+        public int listeningPort() {
+            return port;
+        }
     }
 
     void start() {
@@ -275,10 +396,14 @@ final class CommandLoop implements AutoCloseable {
      */
     private void serverCron() {
         Keyspace keyspace = context.keyspace();
-        activeExpire.run(ActiveExpireCycle.Kind.SLOW);
+        if (!master.isReplica()) {
+            activeExpire.run(ActiveExpireCycle.Kind.SLOW);
+        }
         keyspace.tryResizeHashTables();
         keyspace.incrementallyRehash();
         persistence.cron();
+        // fsync 가 늦어 미룬 AOF 쓰기 재시도
+        aof.cronFlush();
         // run_with_period(1000) - 첫 호출부터 HZ 번마다
         if (cronLoops % HZ == 0) {
             master.cron();
@@ -292,8 +417,12 @@ final class CommandLoop implements AutoCloseable {
      * FAST 만료(DEL 전파 생길 수 있음) → AOF write → 레플리카에 스트림 → 응답 전달
      */
     private void beforeSleep() {
-        activeExpire.run(ActiveExpireCycle.Kind.FAST);
+        // 레플리카는 스스로 만료시키지 않음 - 마스터의 DEL 을 기다림
+        if (!master.isReplica()) {
+            activeExpire.run(ActiveExpireCycle.Kind.FAST);
+        }
         aof.flush();
+        aof.publishFsyncedReploff();
         master.beforeSleep();
         if (!pendingReplies.isEmpty()) {
             pendingReplies.forEach(Runnable::run);
@@ -362,8 +491,14 @@ final class CommandLoop implements AutoCloseable {
         RespValue reply;
         if ((arity > 0 && argv.size() != arity) || argv.size() < -arity) {
             reply = Errors.wrongNumberOfArguments(command.name());
+        } else if (client.isMaster()) {
+            // 마스터가 보낸 건 따름 (mustObeyClient) - MISCONF·READONLY 없음
+            reply = null;
         } else {
             reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
+            if (reply == null && command.writes() && master.deniesWrite(client)) {
+                reply = READONLY;
+            }
         }
         if (reply == null) {
             context.propagation().begin(argv);
@@ -376,7 +511,11 @@ final class CommandLoop implements AutoCloseable {
             }
             // 예외로 끝나도 이미 바꾼 만큼은 기록
             persistence.afterCommand(context.propagation().dirtyCount());
-            propagate(context.propagation().finish());
+            if (unit != null) {
+                unit.addAll(context.propagation().finish());
+            } else {
+                propagate(context.propagation().finish());
+            }
         }
 
         if (events.enabled()) {

@@ -49,6 +49,9 @@ public final class Client {
     /** CLIENT_CLOSE_ASAP - 복제 쪽이 끊기로 함 */
     private volatile boolean closing;
 
+    /** CLIENT_MASTER - 레플리카에서 마스터 스트림을 실행하는 가짜 클라이언트 */
+    private boolean master;
+
     public Client(long id, Socket socket, long nowSeconds) {
         this.id = id;
         this.socket = socket;
@@ -147,6 +150,14 @@ public final class Client {
 
     public boolean closing() {
         return closing;
+    }
+
+    public boolean isMaster() {
+        return master;
+    }
+
+    public void master(boolean value) {
+        master = value;
     }
 
     /** freeClientAsync - 소켓을 닫아 읽기·쓰기 스레드 모두 깨움 */

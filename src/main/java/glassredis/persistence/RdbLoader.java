@@ -38,9 +38,28 @@ public final class RdbLoader {
      * @param expired      지난 만료로 버린 키 수 (rdb_last_load_keys_expired)
      * @param createdBy    redis-ver 보조 필드 - 없으면 null
      * @param error        FAILED 사유 - 아니면 null
+     * @param replId       repl-id 보조 필드 (40자일 때만) - 없으면 null
+     * @param replOffset   repl-offset - 없으면 -1
+     * @param replStreamDb repl-stream-db - 없으면 -1
      */
     public record Result(Status status, long keys, long expired, long emptySkipped, long bytes, long elapsedMillis,
-                         String createdBy, String error) {
+                         String createdBy, String error, String replId, long replOffset, int replStreamDb) {
+
+        /** rsi 가 쓸 만함 - loadDataFromDisk 의 rsi_is_valid 조건 */
+        public boolean replInfoValid() {
+            return replId != null && replOffset != -1 && replStreamDb != -1;
+        }
+    }
+
+    /**
+     * 읽기 방식 - rdbLoad 의 rdbflags 와 iAmMaster
+     *
+     * @param keepExpired  지난 만료 키도 넣음 - 레플리카 (지우는 건 마스터의 DEL)
+     * @param onExpired    마스터가 버린 지난 만료 키 - RDBFLAGS_FEED_REPL 로 백로그에 DEL, 필요 없으면 null
+     */
+    public record Options(boolean keepExpired, java.util.function.Consumer<byte[]> onExpired) {
+        public static final Options MASTER = new Options(false, null);
+        public static final Options REPLICA = new Options(true, null);
     }
 
     /** 손상 - rdbReportCorruptRDB, rdbReportReadError */
@@ -62,34 +81,45 @@ public final class RdbLoader {
     private long emptySkipped;
     private String createdBy;
 
-    private RdbLoader(byte[] data, Keyspace keyspace, boolean aofPreamble) {
+    private final Options options;
+    private String replId;
+    private long replOffset = -1;
+    private int replStreamDb = -1;
+
+    private RdbLoader(byte[] data, Keyspace keyspace, boolean aofPreamble, Options options) {
         this.data = data;
         this.keyspace = keyspace;
         this.now = keyspace.now();
         this.aofPreamble = aofPreamble;
+        this.options = options;
+    }
+
+    /** rdbLoad - 마스터 방식 */
+    public static Result load(Path file, Keyspace keyspace) {
+        return load(file, keyspace, Options.MASTER);
     }
 
     /** rdbLoad - 파일 없으면 NOT_EXIST, 실패해도 그때까지 넣은 키는 남음 (기동 중단 전제) */
-    public static Result load(Path file, Keyspace keyspace) {
+    public static Result load(Path file, Keyspace keyspace, Options options) {
         long start = System.currentTimeMillis();
         byte[] data;
         try {
             data = Files.readAllBytes(file);
         } catch (NoSuchFileException e) {
-            return new Result(Status.NOT_EXIST, 0, 0, 0, 0, 0, null, null);
+            return new Result(Status.NOT_EXIST, 0, 0, 0, 0, 0, null, null, null, -1, -1);
         } catch (IOException e) {
             return new Result(Status.FAILED, 0, 0, 0, 0, 0, null,
-                    "can't open the RDB file " + file + " for reading: " + e.getMessage());
+                    "can't open the RDB file " + file + " for reading: " + e.getMessage(), null, -1, -1);
         }
-        return load(data, keyspace, start);
+        return load(data, keyspace, start, options);
     }
 
     static Result load(byte[] data, Keyspace keyspace) {
-        return load(data, keyspace, System.currentTimeMillis());
+        return load(data, keyspace, System.currentTimeMillis(), Options.MASTER);
     }
 
-    private static Result load(byte[] data, Keyspace keyspace, long start) {
-        return new RdbLoader(data, keyspace, false).result(start);
+    private static Result load(byte[] data, Keyspace keyspace, long start, Options options) {
+        return new RdbLoader(data, keyspace, false, options).result(start);
     }
 
     /**
@@ -100,8 +130,32 @@ public final class RdbLoader {
     record Preamble(Result result, int end) {
     }
 
+    /** C atoi - 앞 공백·부호·숫자까지만, 숫자 없으면 0 */
+    static int atoi(String text) {
+        return (int) strtoll(text);
+    }
+
+    /** C strtoll(.., 10) - 앞 공백·부호·숫자까지만, 숫자 없으면 0 */
+    static long strtoll(String text) {
+        int i = 0;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+            i++;
+        }
+        boolean negative = false;
+        if (i < text.length() && (text.charAt(i) == '-' || text.charAt(i) == '+')) {
+            negative = text.charAt(i) == '-';
+            i++;
+        }
+        long value = 0;
+        while (i < text.length() && Character.isDigit(text.charAt(i))) {
+            value = value * 10 + (text.charAt(i) - '0');
+            i++;
+        }
+        return negative ? -value : value;
+    }
+
     static Preamble loadAofPreamble(byte[] data, Keyspace keyspace) {
-        RdbLoader loader = new RdbLoader(data, keyspace, true);
+        RdbLoader loader = new RdbLoader(data, keyspace, true, Options.MASTER);
         Result result = loader.result(System.currentTimeMillis());
         return new Preamble(result, loader.pos);
     }
@@ -117,7 +171,7 @@ public final class RdbLoader {
             error = "corrupt RDB at offset " + pos + ": " + e;
         }
         return new Result(error == null ? Status.OK : Status.FAILED, keys, expired, emptySkipped, data.length,
-                System.currentTimeMillis() - start, createdBy, error);
+                System.currentTimeMillis() - start, createdBy, error, replId, replOffset, replStreamDb);
     }
 
     /** rdbLoadRioWithLoadingCtx */
@@ -172,10 +226,19 @@ public final class RdbLoader {
                 case RdbFormat.OPCODE_AUX -> {
                     String key = new String(string(), StandardCharsets.US_ASCII);
                     byte[] value = string();
+                    String text = new String(value, StandardCharsets.US_ASCII);
                     if (key.equalsIgnoreCase("redis-ver")) {
-                        createdBy = new String(value, StandardCharsets.US_ASCII);
+                        createdBy = text;
+                    } else if (key.equalsIgnoreCase("repl-stream-db")) {
+                        replStreamDb = atoi(text);
+                    } else if (key.equalsIgnoreCase("repl-id")) {
+                        if (value.length == 40) {
+                            replId = text;
+                        }
+                    } else if (key.equalsIgnoreCase("repl-offset")) {
+                        replOffset = strtoll(text);
                     }
-                    // 그 밖의 보조 필드는 로그용 - 복제 정보는 복제 단계에서
+                    // 그 밖의 보조 필드는 로그용
                     continue;
                 }
                 case RdbFormat.OPCODE_MODULE_AUX ->
@@ -191,8 +254,11 @@ public final class RdbLoader {
             Value value = object(type);
             if (value == null) {
                 emptySkipped++;
-            } else if (!aofPreamble && expireAt != Entry.NO_EXPIRY && expireAt < now) {
+            } else if (!aofPreamble && !options.keepExpired() && expireAt != Entry.NO_EXPIRY && expireAt < now) {
                 expired++;
+                if (options.onExpired() != null) {
+                    options.onExpired().accept(key);
+                }
             } else {
                 Key k = new Key(key);
                 if (keyspace.peek(k) != null) {

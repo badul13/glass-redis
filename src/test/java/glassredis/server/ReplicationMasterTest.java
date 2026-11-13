@@ -4,7 +4,7 @@ import glassredis.command.CommandRegistry;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.Snapshot;
-import glassredis.replication.ReplicationMaster;
+import glassredis.replication.Replicator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,8 +45,8 @@ class ReplicationMasterTest {
 
     /** 디스크리스 지연 없음 - 바로 전송, PING 은 cron 첫 회에만 (오프셋 흔들림 방지) */
     private void start(boolean diskless) throws IOException {
-        ReplicationMaster.Config defaults = ReplicationMaster.Config.defaults();
-        ReplicationMaster.Config config = new ReplicationMaster.Config(diskless, 0, 0, defaults.backlogSize(),
+        Replicator.Config defaults = Replicator.Config.defaults();
+        Replicator.Config config = new Replicator.Config(diskless, 0, 0, defaults.backlogSize(),
                 defaults.backlogTtl(), 3600, defaults.timeout(), defaults.outputHardLimit(),
                 defaults.outputSoftLimit(), defaults.outputSoftSeconds());
         server = new RedisServer("127.0.0.1", 0, CommandRegistry.withBuiltins(), EventBus.NONE,

@@ -33,6 +33,8 @@ import glassredis.command.impl.PopCommand;
 import glassredis.command.impl.PushCommand;
 import glassredis.command.impl.QuitCommand;
 import glassredis.command.impl.ReplconfCommand;
+import glassredis.command.impl.ReplicaofCommand;
+import glassredis.command.impl.SelectCommand;
 import glassredis.command.impl.RoleCommand;
 import glassredis.command.impl.SaddCommand;
 import glassredis.command.impl.SaveCommand;
@@ -108,6 +110,9 @@ public final class CommandRegistry {
         registry.register(SyncCommand.sync());
         registry.register(SyncCommand.psync());
         registry.register(new RoleCommand());
+        registry.register(ReplicaofCommand.replicaof());
+        registry.register(ReplicaofCommand.slaveof());
+        registry.register(new SelectCommand());
 
         registry.register(PushCommand.left());
         registry.register(PushCommand.right());

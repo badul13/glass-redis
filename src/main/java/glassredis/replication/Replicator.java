@@ -4,6 +4,7 @@ import glassredis.command.Client;
 import glassredis.command.Errors;
 import glassredis.command.Numbers;
 import glassredis.command.Replication;
+import glassredis.persistence.RdbLoader;
 import glassredis.persistence.RdbWriter;
 import glassredis.resp.RespReader;
 import glassredis.resp.RespValue;
@@ -18,6 +19,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -36,7 +38,7 @@ import java.util.function.LongSupplier;
  *                              └─ 백로그 (repl-backlog-size) - 끊겼다 돌아온 레플리카의 PSYNC 용
  * </pre>
  */
-public final class ReplicationMaster implements Replication {
+public final class Replicator implements Replication {
 
     /** CONFIG_RUN_ID_SIZE */
     static final int ID_SIZE = 40;
@@ -61,16 +63,25 @@ public final class ReplicationMaster implements Replication {
      * @param outputHardLimit         client-output-buffer-limit replica 의 hard
      * @param outputSoftLimit         같은 설정의 soft
      * @param outputSoftSeconds       soft 를 넘긴 채 버티는 초
+     * @param replicaReadOnly         replica-read-only - 레플리카일 때 쓰기 명령 거부
      */
     public record Config(boolean disklessSync, long disklessSyncDelay, long disklessSyncMaxReplicas,
                          long backlogSize, long backlogTtl, long pingPeriod, long timeout,
-                         long outputHardLimit, long outputSoftLimit, long outputSoftSeconds) {
+                         long outputHardLimit, long outputSoftLimit, long outputSoftSeconds,
+                         boolean replicaReadOnly) {
 
         /** CONFIG_REPL_BACKLOG_MIN_SIZE */
         public static final long MIN_BACKLOG_SIZE = 16 * 1024;
 
         public Config {
             backlogSize = Math.max(backlogSize, MIN_BACKLOG_SIZE);
+        }
+
+        public Config(boolean disklessSync, long disklessSyncDelay, long disklessSyncMaxReplicas,
+                      long backlogSize, long backlogTtl, long pingPeriod, long timeout,
+                      long outputHardLimit, long outputSoftLimit, long outputSoftSeconds) {
+            this(disklessSync, disklessSyncDelay, disklessSyncMaxReplicas, backlogSize, backlogTtl, pingPeriod,
+                    timeout, outputHardLimit, outputSoftLimit, outputSoftSeconds, true);
         }
 
         public static Config defaults() {
@@ -136,7 +147,7 @@ public final class ReplicationMaster implements Replication {
     private final ExecutorService rdbThread = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().name("glass-redis-repl-rdb").daemon(true).factory());
 
-    public ReplicationMaster(Config config, Keyspace keyspace, Children children, Consumer<Runnable> executor,
+    public Replicator(Config config, Keyspace keyspace, Children children, Consumer<Runnable> executor,
                              LongSupplier clock) {
         this.config = config;
         this.keyspace = keyspace;
@@ -162,9 +173,9 @@ public final class ReplicationMaster implements Replication {
         return buffer.masterReplOffset();
     }
 
-    /** shouldPropagate 의 복제 쪽 - 백로그나 레플리카가 있음 */
+    /** shouldPropagate 의 복제 쪽 - 최상위 마스터이고 백로그나 레플리카가 있음 */
     public boolean propagating() {
-        return buffer.hasBacklog() || !slaves.isEmpty();
+        return masterHost == null && (buffer.hasBacklog() || !slaves.isEmpty());
     }
 
     /** 디스크리스 전송 중 - hasActiveChildProcess 에 포함 */
@@ -178,6 +189,10 @@ public final class ReplicationMaster implements Replication {
      * @param dbid -1 이면 SELECT 안 붙임 (MULTI, EXEC, PING)
      */
     public void feed(int dbid, List<byte[]> argv) {
+        // 레플리카는 마스터 스트림 원본을 그대로 중계 - 같은 ID·오프셋 유지
+        if (masterHost != null) {
+            return;
+        }
         if (!buffer.hasBacklog() && slaves.isEmpty()) {
             // AOF 만 켜져 있을 때도 명령마다 1 증가 (WAITAOF 용 오프셋)
             buffer.advanceWithoutBacklog();
@@ -190,12 +205,18 @@ public final class ReplicationMaster implements Replication {
         buffer.feed(command(argv));
     }
 
-    /** rdbPopulateSaveInfo - 백로그 있는 마스터만, 아니면 null */
+    /**
+     * rdbPopulateSaveInfo - 백로그 있는 마스터, 또는 마스터(캐시 포함)가 있는 레플리카, 아니면 null
+     * 레플리카의 스트림 DB 는 마스터 클라이언트가 선택한 DB - 여기선 DB 0 하나
+     */
     public RdbWriter.ReplInfo saveInfo() {
-        if (!buffer.hasBacklog()) {
-            return null;
+        if (masterHost == null && buffer.hasBacklog()) {
+            return new RdbWriter.ReplInfo(slaveseldb == -1 ? 0 : slaveseldb, replid, buffer.masterReplOffset());
         }
-        return new RdbWriter.ReplInfo(slaveseldb == -1 ? 0 : slaveseldb, replid, buffer.masterReplOffset());
+        if (master != null || cachedMaster != null) {
+            return new RdbWriter.ReplInfo(0, replid, buffer.masterReplOffset());
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------- 명령
@@ -232,7 +253,10 @@ public final class ReplicationMaster implements Replication {
             } else if (option.equalsIgnoreCase("ack")) {
                 return ack(client, args, i);
             } else if (option.equalsIgnoreCase("getack")) {
-                // 레플리카일 때만 의미 - 마스터는 아무것도 안 함
+                // 마스터가 지금 ACK 를 달라고 함 - 레플리카일 때만
+                if (masterHost != null && master != null) {
+                    sendAck();
+                }
                 return RespValue.NO_REPLY;
             } else if (option.equalsIgnoreCase("rdb-only")) {
                 OptionalLong flag = Numbers.parseLong(value);
@@ -307,7 +331,18 @@ public final class ReplicationMaster implements Replication {
         boolean psync = text(argv.get(0)).equalsIgnoreCase("psync");
         if (argv.size() > 3 && psync && text(argv.get(3)).equalsIgnoreCase("failover")) {
             log("레플리카 ID %s 로 페일오버 요청을 받았습니다", text(argv.get(1)));
-            return new RespValue.Err("ERR PSYNC FAILOVER can't be sent to a master.");
+            if (masterHost == null) {
+                return new RespValue.Err("ERR PSYNC FAILOVER can't be sent to a master.");
+            }
+            if (!text(argv.get(1)).equalsIgnoreCase(replid)) {
+                return new RespValue.Err("ERR PSYNC FAILOVER replid must match my replid.");
+            }
+            unsetMaster();
+            log("마스터 모드로 바뀌었습니다 (페일오버 요청)");
+        }
+        // 마스터와 끊긴 레플리카는 하위 레플리카에 줄 데이터가 없음
+        if (masterHost != null && replState != ReplState.CONNECTED) {
+            return new RespValue.Err("NOMASTERLINK Can't SYNC while not connected with my master");
         }
         // 묶음 앞 명령의 응답이 아직 안 나감 - 버퍼가 섞임
         if (client.hasPendingReplies()) {
@@ -390,6 +425,23 @@ public final class ReplicationMaster implements Replication {
 
     @Override
     public RespValue role() {
+        if (masterHost != null) {
+            // slave, 마스터 주소, 포트, 연결 상태, 처리한 오프셋 (마스터 없으면 -1)
+            String state = switch (replState) {
+                case NONE -> "none";
+                case CONNECT -> "connect";
+                case CONNECTING -> "connecting";
+                case HANDSHAKE -> "handshake";
+                case TRANSFER -> "sync";
+                case CONNECTED -> "connected";
+            };
+            return RespValue.Array.of(
+                    RespValue.BulkString.of("slave"),
+                    RespValue.BulkString.of(masterHost),
+                    new RespValue.Int(masterPort),
+                    RespValue.BulkString.of(state),
+                    new RespValue.Int(master != null ? master.reploff : -1));
+        }
         List<RespValue> replicas = new ArrayList<>();
         for (ReplicaLink slave : slaves) {
             String ip = slave.client.announcedIp() != null ? slave.client.announcedIp() : slave.client.peerIp();
@@ -634,9 +686,10 @@ public final class ReplicationMaster implements Replication {
         }
     }
 
-    /** replicationCron 의 마스터 부분 - 1초마다 */
+    /** replicationCron - 1초마다, 레플리카 부분(타임아웃·재접속·ACK) 먼저 */
     public void cron() {
         long now = clock.getAsLong();
+        replicaCron(now);
 
         // 스트림에 PING - 레플리카가 마스터 타임아웃을 잴 수 있게 (오프셋도 늘어남), shared.ping 은 소문자
         if (cronLoops % config.pingPeriod() == 0 && !slaves.isEmpty()) {
@@ -675,7 +728,7 @@ public final class ReplicationMaster implements Replication {
         }
 
         // 레플리카 없이 오래되면 백로그 해제 - 이후 쓰기가 오프셋을 안 늘리므로 ID 도 새로
-        if (slaves.isEmpty() && config.backlogTtl() > 0 && buffer.hasBacklog()) {
+        if (slaves.isEmpty() && config.backlogTtl() > 0 && buffer.hasBacklog() && masterHost == null) {
             long idle = now - noSlavesSince;
             if (idle > config.backlogTtl()) {
                 changeReplicationId();
@@ -721,12 +774,523 @@ public final class ReplicationMaster implements Replication {
         }
     }
 
+    // ---------------------------------------------------------------- 레플리카 쪽
+
+    /** 레플리카가 마스터 스트림을 실행할 때 서버에 부탁하는 일 - CommandLoop 가 구현 */
+    public interface ReplicaHost {
+        /** 마스터 클라이언트로 call() - 응답은 버려짐, 전파는 AOF 만 */
+        RespValue executeFromMaster(Client master, List<byte[]> argv);
+
+        /** 실행 단위 시작·끝 - 끝에서 모은 전파를 한꺼번에 (EXEC 면 MULTI/EXEC 로) */
+        void beginUnit();
+
+        void endUnit();
+
+        /**
+         * readSyncBulkPayload 의 디스크 로드 - AOF 멈춤, emptyData, dump.rdb 로 이름 바꿔 로드
+         *
+         * @return 실패 사유, 성공이면 null
+         */
+        String loadFromMaster(Path received);
+
+        /** restartAOFAfterSYNC */
+        void afterSync();
+
+        /** REPLCONF ACK 의 FACK - AOF 꺼져 있으면 -1 */
+        long fsyncedReploff();
+
+        /** 이 서버 포트 - REPLCONF listening-port */
+        int listeningPort();
+    }
+
+    /** repl_state - ROLE 에 보이는 이름은 role() */
+    enum ReplState { NONE, CONNECT, CONNECTING, HANDSHAKE, TRANSFER, CONNECTED }
+
+    /** server.master - 연결된 마스터 클라이언트 */
+    private static final class MasterClient {
+        final MasterLink link;
+        final Client client;
+        String replid;
+        /** reploff - 처리까지 끝낸 스트림 위치 */
+        long reploff;
+        /** 스트림 첫 바이트 앞의 오프셋 - 받은 바이트 수 더하면 위치 */
+        final long streamBase;
+        /** CLIENT_PRE_PSYNC - SYNC 로 붙음, ACK 안 보냄 */
+        final boolean prePsync;
+        long lastInteraction;
+        /** MULTI 이후 쌓는 명령 - null 이면 MULTI 아님 */
+        List<List<byte[]>> multi;
+        /** 받았지만 아직 하위 레플리카로 안 넘긴 원본 */
+        final ByteArrayOutputStream unproxied = new ByteArrayOutputStream();
+        long proxied;
+
+        MasterClient(MasterLink link, String replid, long reploff, long now) {
+            this.link = link;
+            this.client = new Client(-1, null, now);
+            this.client.master(true);
+            this.replid = replid;
+            this.reploff = reploff;
+            this.streamBase = reploff;
+            this.prePsync = reploff == -1;
+            this.lastInteraction = now;
+            this.proxied = reploff;
+        }
+    }
+
+    /** server.cached_master - 끊긴 마스터의 ID 와 위치, PSYNC 로 이어 받기 시도 */
+    private record CachedMaster(String replid, long reploff) {
+    }
+
+    private ReplicaHost host;
+    /** server.masterhost - null 이면 마스터 */
+    private String masterHost;
+    private int masterPort;
+    private ReplState replState = ReplState.NONE;
+    private MasterLink link;
+    private MasterClient master;
+    private CachedMaster cachedMaster;
+    /** server.master_replid, master_initial_offset - +FULLRESYNC 로 받은 값 */
+    private String masterReplid;
+    private long masterInitialOffset = -1;
+    /** server.repl_down_since */
+    private long downSince;
+
+    public void host(ReplicaHost host) {
+        this.host = host;
+    }
+
+    /** server.masterhost != NULL */
+    public boolean isReplica() {
+        return masterHost != null;
+    }
+
+    /** 레플리카에 쓰기 거부 - replica-read-only 이고 마스터가 보낸 게 아닐 때 */
+    public boolean deniesWrite(Client client) {
+        return masterHost != null && config.replicaReadOnly() && !client.isMaster();
+    }
+
+    @Override
+    public RespValue replicaof(Client client, List<byte[]> args) {
+        if (text(args.get(0)).equalsIgnoreCase("no") && text(args.get(1)).equalsIgnoreCase("one")) {
+            if (masterHost != null) {
+                unsetMaster();
+                log("마스터 모드로 바뀌었습니다 (사용자 요청)");
+            }
+            return RespValue.OK;
+        }
+        if (client.isReplica()) {
+            return new RespValue.Err("ERR Command is not valid when client is a replica.");
+        }
+        OptionalLong port = Numbers.parseLong(args.get(1));
+        if (port.isEmpty() || port.getAsLong() < 0 || port.getAsLong() > 65535) {
+            return new RespValue.Err("ERR Invalid master port");
+        }
+        String hostName = text(args.get(0));
+        if (masterHost != null && masterHost.equalsIgnoreCase(hostName) && masterPort == port.getAsLong()) {
+            log("REPLICAOF 가 이미 연결된 마스터와 같아 아무것도 하지 않습니다");
+            return new RespValue.SimpleString("OK Already connected to specified master");
+        }
+        setMaster(hostName, (int) port.getAsLong());
+        log("REPLICAOF %s:%d 설정 (사용자 요청)", masterHost, masterPort);
+        return RespValue.OK;
+    }
+
+    /**
+     * 기동 시 replicaof 설정 - 저장된 RDB 의 복제 정보로 캐시된 마스터를 만들어 PSYNC 로 이어 받기 시도
+     * (loadDataFromDisk 의 !iAmMaster 쪽)
+     */
+    public void startAsReplica(String hostName, int port, RdbLoader.Result loaded) {
+        masterHost = hostName;
+        masterPort = port;
+        keyspace.setReplica(true);
+        if (loaded != null && loaded.status() == RdbLoader.Status.OK && loaded.replInfoValid()) {
+            replid = loaded.replId();
+            buffer.setMasterReplOffset(loaded.replOffset());
+            cacheMasterUsingMyself();
+        }
+        replState = ReplState.CONNECT;
+    }
+
+    /**
+     * 기동 시 마스터로 RDB 를 읽은 뒤 - 저장된 복제 ID 를 두 번째 ID 로 (loadDataFromDisk 의 iAmMaster 쪽)
+     * 로드하며 버린 지난 만료 키는 백로그에 DEL 로, 복제 정보가 없으면 백로그는 다시 버림
+     */
+    public void afterMasterLoad(RdbLoader.Result loaded, List<byte[]> expiredKeys) {
+        buffer.createBacklog();
+        for (byte[] key : expiredKeys) {
+            feed(0, List.of(ascii("DEL"), key));
+        }
+        if (loaded != null && loaded.status() == RdbLoader.Status.OK && loaded.replInfoValid()) {
+            replid2 = loaded.replId();
+            secondReplidOffset = loaded.replOffset() + 1;
+            buffer.rebase(loaded.replOffset());
+            noSlavesSince = clock.getAsLong();
+        } else {
+            buffer.freeBacklog();
+        }
+    }
+
+    /** replicationSetMaster */
+    private void setMaster(String hostName, int port) {
+        boolean wasMaster = masterHost == null;
+        masterHost = null;
+        if (master != null) {
+            freeMaster(true);
+        }
+        masterHost = hostName;
+        masterPort = port;
+        keyspace.setReplica(true);
+        cancelHandshake();
+        if (wasMaster) {
+            cachedMaster = null;
+            cacheMasterUsingMyself();
+        }
+        replState = ReplState.CONNECT;
+        log("마스터 %s:%d 에 연결합니다", masterHost, masterPort);
+        connectWithMaster();
+    }
+
+    /** replicationUnsetMaster - 데이터는 그대로, 복제 이력은 두 번째 ID 로 남김 */
+    private void unsetMaster() {
+        masterHost = null;
+        if (master != null) {
+            freeMaster(false);
+        }
+        cachedMaster = null;
+        cancelHandshake();
+        shiftReplicationId();
+        disconnectSlaves();
+        replState = ReplState.NONE;
+        slaveseldb = -1;
+        noSlavesSince = clock.getAsLong();
+        downSince = 0;
+        keyspace.setReplica(false);
+        if (host != null) {
+            host.afterSync();
+        }
+    }
+
+    /** replicationCacheMasterUsingMyself - 자기 ID·오프셋으로 캐시된 마스터 */
+    private void cacheMasterUsingMyself() {
+        log("레플리카가 되기 전 내 복제 정보로 캐시된 마스터를 만듭니다. 새 마스터와 부분 동기화가 될 수도 있습니다");
+        masterInitialOffset = buffer.masterReplOffset();
+        cachedMaster = new CachedMaster(replid, buffer.masterReplOffset());
+    }
+
+    /** connectWithMaster */
+    private void connectWithMaster() {
+        Path dir = children.rdbFile() != null && children.rdbFile().getParent() != null
+                ? children.rdbFile().getParent() : Path.of(".");
+        link = new MasterLink(this, masterHost, masterPort, executor, clock, dir, config.timeout());
+        replState = ReplState.CONNECTING;
+        log("MASTER <-> REPLICA 동기화 시작");
+        link.start();
+    }
+
+    /** cancelReplicationHandshake - 진행 중 접속·전송 정리, 다음 cron 에 다시 */
+    private void cancelHandshake() {
+        if (link != null && (master == null || master.link != link)) {
+            link.close();
+            link = null;
+        }
+        if (replState == ReplState.CONNECTING || replState == ReplState.HANDSHAKE
+                || replState == ReplState.TRANSFER) {
+            replState = ReplState.CONNECT;
+        }
+    }
+
+    // 링크 스레드가 실행 스레드로 부르는 것 - 낡은 링크면 무시
+
+    boolean linkConnected(MasterLink from) {
+        if (from != link) {
+            return false;
+        }
+        log("SYNC 용 연결이 맺어졌습니다");
+        replState = ReplState.HANDSHAKE;
+        return true;
+    }
+
+    int listeningPort() {
+        return host == null ? 0 : host.listeningPort();
+    }
+
+    /** slaveTryPartialResynchronization 의 보내는 쪽 */
+    String[] psyncArgs() {
+        masterInitialOffset = -1;
+        if (cachedMaster != null) {
+            String offset = Long.toString(cachedMaster.reploff() + 1);
+            log("부분 동기화를 시도합니다 (요청 %s:%s)", cachedMaster.replid(), offset);
+            return new String[]{cachedMaster.replid(), offset};
+        }
+        log("부분 동기화 불가 (캐시된 마스터 없음)");
+        return new String[]{"?", "-1"};
+    }
+
+    boolean fullResyncStarted(MasterLink from, String id, long offset) {
+        if (from != link) {
+            return false;
+        }
+        if (id == null && offset == -1 && masterReplid == null) {
+            masterReplid = "0".repeat(ID_SIZE);
+        } else if (id == null) {
+            log("마스터의 +FULLRESYNC 형식이 잘못됐습니다");
+            masterReplid = "0".repeat(ID_SIZE);
+        } else {
+            masterReplid = id;
+            masterInitialOffset = offset;
+            log("마스터에게서 전체 동기화: %s:%d", id, offset);
+        }
+        replState = ReplState.TRANSFER;
+        return true;
+    }
+
+    /** readSyncBulkPayload 끝 - 로드 성공하면 마스터 클라이언트 생성, CONNECTED */
+    boolean loadFullSync(MasterLink from, Path received) {
+        if (from != link) {
+            return false;
+        }
+        // replicationAttachToNewMaster - 하위 레플리카도 새로 동기화하도록
+        cachedMaster = null;
+        disconnectSlaves();
+        buffer.freeBacklog();
+
+        String failure = host.loadFromMaster(received);
+        if (failure != null) {
+            log("마스터 동기화 RDB 를 디스크에서 로드하지 못했습니다: %s", failure);
+            cancelHandshake();
+            return false;
+        }
+        master = new MasterClient(from, masterReplid, masterInitialOffset, clock.getAsLong());
+        replState = ReplState.CONNECTED;
+        downSince = 0;
+        replid = master.replid;
+        buffer.setMasterReplOffset(master.reploff);
+        clearReplicationId2();
+        if (!buffer.hasBacklog()) {
+            buffer.createBacklog();
+        }
+        log("MASTER <-> REPLICA 동기화: 성공");
+        // 디스크리스 RDB 는 첫 ACK 를 받아야 마스터가 스트림을 시작 - AOF 재시작보다 먼저 (FACK 없음)
+        sendAck();
+        host.afterSync();
+        return true;
+    }
+
+    /** +CONTINUE - 캐시된 마스터를 되살림, ID 가 바뀌었으면 옛 ID 를 두 번째로 */
+    Long continueResync(MasterLink from, String newId) {
+        if (from != link || cachedMaster == null) {
+            return null;
+        }
+        log("마스터와 부분 동기화 성공");
+        String id = cachedMaster.replid();
+        if (newId != null && !newId.equals(id)) {
+            log("마스터 복제 ID 가 %s 로 바뀌었습니다", newId);
+            replid2 = id;
+            secondReplidOffset = buffer.masterReplOffset() + 1;
+            replid = newId;
+            id = newId;
+            disconnectSlaves();
+        }
+        master = new MasterClient(from, id, cachedMaster.reploff(), clock.getAsLong());
+        cachedMaster = null;
+        replState = ReplState.CONNECTED;
+        downSince = 0;
+        if (!buffer.hasBacklog()) {
+            buffer.createBacklog();
+        }
+        log("MASTER <-> REPLICA 동기화: 마스터가 부분 동기화를 받아들였습니다");
+        return master.reploff;
+    }
+
+    /**
+     * 마스터 스트림 실행 - processInputBuffer + commandProcessed
+     * 명령마다 reploff 를 그 명령 끝 위치로, MULTI 안이면 EXEC 까지 미룸
+     * 처리한 만큼 원본 그대로 백로그에 (하위 레플리카가 마스터와 같은 ID·오프셋을 씀)
+     */
+    void applyFromMaster(MasterLink from, List<MasterLink.Received> commands, byte[] raw) {
+        if (master == null || master.link != from) {
+            return;
+        }
+        master.lastInteraction = clock.getAsLong();
+        master.unproxied.writeBytes(raw);
+        keyspace.setMasterStream(true);
+        try {
+            for (MasterLink.Received received : commands) {
+                List<byte[]> argv = received.argv();
+                if (argv.isEmpty()) {
+                    // 줄바꿈 - 위치는 다음 명령에서 같이 셈
+                    continue;
+                }
+                long position = master.streamBase + received.consumed();
+                String name = text(argv.get(0));
+                if (master.multi != null) {
+                    if (name.equalsIgnoreCase("EXEC")) {
+                        List<List<byte[]>> queued = master.multi;
+                        master.multi = null;
+                        host.beginUnit();
+                        for (List<byte[]> command : queued) {
+                            runFromMaster(command);
+                        }
+                        host.endUnit();
+                        master.reploff = position;
+                    } else if (name.equalsIgnoreCase("DISCARD")) {
+                        master.multi = null;
+                        master.reploff = position;
+                    } else if (name.equalsIgnoreCase("MULTI")) {
+                        criticalError("ERR MULTI calls can not be nested", "multi");
+                    } else {
+                        master.multi.add(argv);
+                    }
+                } else if (name.equalsIgnoreCase("MULTI")) {
+                    master.multi = new ArrayList<>();
+                } else {
+                    host.beginUnit();
+                    runFromMaster(argv);
+                    host.endUnit();
+                    master.reploff = position;
+                }
+            }
+        } finally {
+            keyspace.setMasterStream(false);
+        }
+        long applied = master.reploff - master.proxied;
+        if (applied > 0) {
+            byte[] pending = master.unproxied.toByteArray();
+            master.unproxied.reset();
+            master.unproxied.write(pending, (int) applied, pending.length - (int) applied);
+            master.proxied = master.reploff;
+            // replicationFeedStreamFromMasterStream
+            if (buffer.hasBacklog()) {
+                buffer.feed(Arrays.copyOf(pending, (int) applied));
+            }
+        }
+    }
+
+    private void runFromMaster(List<byte[]> argv) {
+        RespValue reply = host.executeFromMaster(master.client, argv);
+        if (reply instanceof RespValue.Err err) {
+            criticalError(err.message(), text(argv.get(0)));
+        }
+    }
+
+    /** 마스터에게 에러를 돌려줄 상황 - 응답은 안 보내고 크게 기록 */
+    private static void criticalError(String error, String command) {
+        log("== CRITICAL == 이 레플리카가 마스터에게 에러를 보내려 합니다: '%s' (명령 '%s' 처리 후)", error, command);
+    }
+
+    /** replicationSendAck - REPLCONF ACK <reploff> [FACK <aofofs>] */
+    private void sendAck() {
+        if (master == null || master.link.writer() == null) {
+            return;
+        }
+        long fsynced = host.fsyncedReploff();
+        List<byte[]> argv = fsynced != -1
+                ? List.of(ascii("REPLCONF"), ascii("ACK"), ascii(Long.toString(master.reploff)),
+                ascii("FACK"), ascii(Long.toString(fsynced)))
+                : List.of(ascii("REPLCONF"), ascii("ACK"), ascii(Long.toString(master.reploff)));
+        master.link.writer().outOfBand(command(argv));
+    }
+
+    /** 링크 실패 - 연결됐던 마스터면 캐시하고 바로 재접속, 핸드셰이크 중이면 다음 cron 에 */
+    void linkFailed(MasterLink from, String reason) {
+        if (from != link) {
+            return;
+        }
+        if (master != null && master.link == from) {
+            log("마스터와의 연결이 끊겼습니다");
+            freeMaster(true);
+            return;
+        }
+        if (reason != null) {
+            log("마스터 동기화 실패: %s", reason);
+        }
+        cancelHandshake();
+    }
+
+    /** 마스터가 프로토콜을 어김 - 캐시 없이 끊음 (CLIENT_PROTOCOL_ERROR) */
+    void masterProtocolError(MasterLink from, String reason) {
+        if (master == null || master.link != from) {
+            return;
+        }
+        log("%s - 마스터 연결을 끊고 캐시된 마스터도 버립니다", reason);
+        freeMaster(false);
+    }
+
+    /** freeClient(server.master) - 캐시하면 바로 다시 접속 (replicationHandleMasterDisconnection) */
+    private void freeMaster(boolean cache) {
+        MasterClient old = master;
+        master = null;
+        old.link.close();
+        if (link == old.link) {
+            link = null;
+        }
+        if (cache) {
+            log("끊긴 마스터의 상태를 캐시합니다");
+            cachedMaster = new CachedMaster(old.replid, old.reploff);
+        }
+        replState = ReplState.CONNECT;
+        downSince = clock.getAsLong();
+        if (masterHost != null && cache) {
+            log("마스터 %s:%d 에 다시 연결합니다", masterHost, masterPort);
+            connectWithMaster();
+        }
+    }
+
+    /** replicationCron 의 레플리카 부분 */
+    private void replicaCron(long now) {
+        if (masterHost == null) {
+            return;
+        }
+        if ((replState == ReplState.CONNECTING || replState == ReplState.HANDSHAKE) && link != null
+                && now - link.lastIo() > config.timeout()) {
+            log("마스터 접속 타임아웃");
+            cancelHandshake();
+        }
+        if (replState == ReplState.TRANSFER && link != null && now - link.lastIo() > config.timeout()) {
+            log("마스터에게서 RDB 받기 타임아웃. 계속되면 repl-timeout 을 늘려 보세요");
+            cancelHandshake();
+        }
+        if (replState == ReplState.CONNECTED && master != null && now - master.lastInteraction > config.timeout()) {
+            log("마스터 타임아웃: 데이터도 PING 도 받지 못했습니다");
+            freeMaster(true);
+        }
+        if (replState == ReplState.CONNECT) {
+            log("마스터 %s:%d 에 연결합니다", masterHost, masterPort);
+            connectWithMaster();
+        }
+        if (master != null && !master.prePsync) {
+            sendAck();
+        }
+    }
+
+    /** shiftReplicationId - 지금 ID 를 두 번째로 남기고 새 ID */
+    private void shiftReplicationId() {
+        replid2 = replid;
+        secondReplidOffset = buffer.masterReplOffset() + 1;
+        changeReplicationId();
+        log("두 번째 복제 ID 를 %s (오프셋 %d 까지 유효) 로, 새 복제 ID 는 %s", replid2, secondReplidOffset, replid);
+    }
+
+    /** disconnectSlaves */
+    private void disconnectSlaves() {
+        for (ReplicaLink slave : List.copyOf(slaves)) {
+            free(slave);
+        }
+    }
+
     // ---------------------------------------------------------------- 연결
 
     /** 연결이 끊김 - 커넥션 스레드가 알림 */
     public void clientClosed(Client client) {
         if (client.replica() instanceof ReplicaLink slave) {
             free(slave);
+        }
+    }
+
+    /** 레플리카가 보낸 빈 줄 - ACK 시각 갱신 (RDB 로드 중인 레플리카의 살아 있음 신호) */
+    public void replicaNewline(Client client) {
+        if (client.replica() instanceof ReplicaLink slave) {
+            slave.ackTime = clock.getAsLong();
         }
     }
 
@@ -742,6 +1306,9 @@ public final class ReplicationMaster implements Replication {
     public void close() {
         for (ReplicaLink slave : List.copyOf(slaves)) {
             free(slave);
+        }
+        if (link != null) {
+            link.close();
         }
         rdbThread.shutdownNow();
     }

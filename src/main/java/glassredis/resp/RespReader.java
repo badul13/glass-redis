@@ -46,6 +46,23 @@ public final class RespReader {
         return in.scanCommand();
     }
 
+    /** 지금까지 읽어 간 바이트 수 - 명령 경계에서 재면 그 명령까지의 위치 */
+    public long consumed() {
+        return in.consumed;
+    }
+
+    /** 이후 읽는 바이트를 원본 그대로 모음 - 마스터 스트림 중계용 */
+    public void record() {
+        in.recording = new ByteArrayOutputStream();
+    }
+
+    /** 모은 원본을 꺼내고 비움 */
+    public byte[] takeRecorded() {
+        byte[] bytes = in.recording.toByteArray();
+        in.recording.reset();
+        return bytes;
+    }
+
     /**
      * 명령 하나를 argv로 읽기
      *
@@ -432,10 +449,20 @@ public final class RespReader {
             this.in = in;
         }
 
+        /** 지금까지 파서에 넘긴 바이트 - 마스터 스트림의 reploff 계산 */
+        private long consumed;
+
+        /** null 이 아니면 넘긴 바이트를 그대로 적어 둠 - 하위 레플리카로 중계할 원본 */
+        private ByteArrayOutputStream recording;
+
         @Override
         public int read() throws IOException {
             if (pos >= count && !fill()) {
                 return -1;
+            }
+            consumed++;
+            if (recording != null) {
+                recording.write(buf[pos]);
             }
             return buf[pos++] & 0xff;
         }
@@ -448,7 +475,14 @@ public final class RespReader {
             }
             if (pos >= count) {
                 if (length >= buf.length) {
-                    return in.read(destination, offset, length);
+                    int direct = in.read(destination, offset, length);
+                    if (direct > 0) {
+                        consumed += direct;
+                        if (recording != null) {
+                            recording.write(destination, offset, direct);
+                        }
+                    }
+                    return direct;
                 }
                 if (!fill()) {
                     return -1;
@@ -457,6 +491,10 @@ public final class RespReader {
             int n = Math.min(length, count - pos);
             System.arraycopy(buf, pos, destination, offset, n);
             pos += n;
+            consumed += n;
+            if (recording != null) {
+                recording.write(destination, offset, n);
+            }
             return n;
         }
 

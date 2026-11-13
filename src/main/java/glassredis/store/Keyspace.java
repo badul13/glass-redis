@@ -17,9 +17,10 @@ import java.util.function.Consumer;
  */
 public final class Keyspace {
 
-    private final Dict<Value> dict = new Dict<>();
+    /** emptyData 로 통째 교체 - 그 외엔 고정 */
+    private Dict<Value> dict = new Dict<>();
     /** 만료 걸린 키만 */
-    private final Dict<Long> expires = new Dict<>();
+    private Dict<Long> expires = new Dict<>();
 
     private final InstantSource clock;
 
@@ -31,6 +32,12 @@ public final class Keyspace {
 
     /** AOF 로딩 중 - 만료 판단 중지 (keyIsExpired, checkAlreadyExpired) */
     private boolean loading;
+
+    /** 레플리카 - 만료 키를 지우지 않고 없는 것으로만 보임, 삭제는 마스터의 DEL 로 */
+    private boolean replica;
+
+    /** 마스터 스트림 실행 중 - 레플리카는 이때 만료를 보지 않음 (CLIENT_MASTER) */
+    private boolean masterStream;
 
     public Keyspace() {
         this(InstantSource.system(), EventBus.NONE);
@@ -65,6 +72,26 @@ public final class Keyspace {
     /** 로딩 중이면 지난 만료 시각도 그대로 저장 - 삭제는 로딩 후 만료 처리가 DEL로 */
     public boolean loading() {
         return loading;
+    }
+
+    /** server.masterhost != NULL */
+    public void setReplica(boolean replica) {
+        this.replica = replica;
+    }
+
+    public boolean replica() {
+        return replica;
+    }
+
+    /** current_client 가 마스터인 동안 */
+    public void setMasterStream(boolean executing) {
+        this.masterStream = executing;
+    }
+
+    /** emptyData - 키 전부 버림 */
+    public void clear() {
+        dict = new Dict<>();
+        expires = new Dict<>();
     }
 
     /** 없거나 만료 시 null, 만료 키는 이 시점 삭제 - lookupKey → expireIfNeeded */
@@ -129,7 +156,10 @@ public final class Keyspace {
         return expireAt != null && now() > expireAt;
     }
 
-    /** 만료 시 삭제 후 true - 지연 만료, 주기적 만료 공통 경로 */
+    /**
+     * 만료 시 삭제 후 true - 지연 만료, 주기적 만료 공통 경로 (expireIfNeeded)
+     * 레플리카는 삭제 없이 true (마스터 스트림 실행 중이면 false) - 일관성은 마스터의 DEL 이 맡음
+     */
     public boolean expireIfDue(Key key, RemovalReason reason) {
         if (loading) {
             return false;
@@ -139,6 +169,9 @@ public final class Keyspace {
         // 같은 ms에는 생존 - now > when
         if (expireAt == null || now <= expireAt) {
             return false;
+        }
+        if (replica) {
+            return !masterStream;
         }
         delete(key);
         expiredListener.accept(key);

@@ -4,7 +4,7 @@ import glassredis.command.ServerControl;
 import glassredis.observe.RdbSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.Snapshot;
-import glassredis.replication.ReplicationMaster;
+import glassredis.replication.Replicator;
 import glassredis.resp.RespValue;
 import glassredis.store.Keyspace;
 
@@ -15,7 +15,7 @@ import java.nio.file.Path;
  * 겹치면 예약해 두고 serverCron 에서 시작
  * 실행 스레드 전용
  */
-final class Persistence implements ServerControl, ReplicationMaster.Children {
+final class Persistence implements ServerControl, Replicator.Children {
 
     private static final RespValue MISCONF = new RespValue.Err("MISCONF Redis is configured to save RDB snapshots, "
             + "but it's currently unable to persist to disk. Commands that may modify the data set are disabled, "
@@ -34,9 +34,9 @@ final class Persistence implements ServerControl, ReplicationMaster.Children {
     }
 
     /** 디스크리스 전송도 자식 작업 - 생성 뒤 연결 */
-    private ReplicationMaster replication;
+    private Replicator replication;
 
-    void replication(ReplicationMaster master) {
+    void replication(Replicator master) {
         this.replication = master;
     }
 

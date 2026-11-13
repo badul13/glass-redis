@@ -167,7 +167,12 @@ public final class Snapshot {
 
     /** 기동 시 복구 - AOF 꺼져 있을 때만 (loadDataFromDisk) */
     public RdbLoader.Result load(Keyspace keyspace) {
-        loadResult = RdbLoader.load(file, keyspace);
+        return load(keyspace, RdbLoader.Options.MASTER);
+    }
+
+    /** 기동 복구·레플리카 전체 동기화 - 레플리카면 지난 만료 키도 유지 */
+    public RdbLoader.Result load(Keyspace keyspace, RdbLoader.Options options) {
+        loadResult = RdbLoader.load(file, keyspace, options);
         return loadResult;
     }
 

@@ -81,7 +81,8 @@ class AppendOnlyLogTest {
         assertEquals("", file("appendonly.aof.1.incr.aof"), "flush 전에는 파일에 없음");
         aof.flush();
         aof.feedAll(List.of(argv("DEL", "y"), argv("SET", "y", "2")));
-        aof.flush();
+        // 첫 flush 가 맡긴 fsync 가 아직이면 everysec 은 write 를 미룸 - 내용 확인용으로 강제
+        aof.flush(true);
         assertEquals("*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"
                         + "*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nDEL\r\n$1\r\ny\r\n*3\r\n$3\r\nSET\r\n$1\r\ny\r\n$1\r\n2\r\n"
                         + "*1\r\n$4\r\nEXEC\r\n",
@@ -125,7 +126,7 @@ class AppendOnlyLogTest {
         assertEquals("Background append only file rewriting already in progress",
                 aof.rewriteInBackground(keyspace, "test"));
         aof.feedAll(List.of(argv("SET", "during", "rewrite")));
-        aof.flush();
+        aof.flush(true);
 
         while (aof.rewriting()) {
             aof.checkRewriteDone();

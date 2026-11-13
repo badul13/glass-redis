@@ -9,7 +9,7 @@ import glassredis.observe.SortedSetSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
-import glassredis.replication.ReplicationMaster;
+import glassredis.replication.Replicator;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 
@@ -18,6 +18,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -45,7 +47,7 @@ public final class RedisServer implements AutoCloseable {
     /** null이면 RDB 없음 - 기동 로드 생략, SAVE 실패 (현재 폴더 dump.rdb 를 테스트가 읽지 않도록) */
     private final Snapshot snapshot;
 
-    private final ReplicationMaster.Config replication;
+    private final Replicator.Config replication;
 
     private final AtomicLong nextConnectionId = new AtomicLong(1);
     private final CountDownLatch stopped = new CountDownLatch(1);
@@ -69,12 +71,12 @@ public final class RedisServer implements AutoCloseable {
 
     public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events, AppendOnlyLog aof,
                        Snapshot snapshot) {
-        this(bindAddress, port, registry, events, aof, snapshot, ReplicationMaster.Config.defaults());
+        this(bindAddress, port, registry, events, aof, snapshot, Replicator.Config.defaults());
     }
 
     /** @param replication 복제 설정 (repl-*) */
     public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events, AppendOnlyLog aof,
-                       Snapshot snapshot, ReplicationMaster.Config replication) {
+                       Snapshot snapshot, Replicator.Config replication) {
         this.replication = replication;
         this.bindAddress = bindAddress;
         this.requestedPort = port;
@@ -82,6 +84,16 @@ public final class RedisServer implements AutoCloseable {
         this.events = events;
         this.aof = aof;
         this.snapshot = snapshot;
+    }
+
+    /** replicaof 설정 - start() 전, 기동하면 이 마스터에 붙음 */
+    private String masterHost;
+    private int masterPort;
+
+    public RedisServer replicaOf(String host, int port) {
+        this.masterHost = host;
+        this.masterPort = port;
+        return this;
     }
 
     /**
@@ -96,8 +108,12 @@ public final class RedisServer implements AutoCloseable {
             aof = new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events);
         }
         aof.start(keyspace, registry);
+        RdbLoader.Result loaded = null;
+        // 마스터가 로드하며 버린 지난 만료 키 - 백로그에 DEL 로 (RDBFLAGS_FEED_REPL)
+        List<byte[]> expiredKeys = new ArrayList<>();
         if (!aof.enabled() && snapshot != null) {
-            RdbLoader.Result loaded = snapshot.load(keyspace);
+            loaded = snapshot.load(keyspace, masterHost != null
+                    ? RdbLoader.Options.REPLICA : new RdbLoader.Options(false, expiredKeys::add));
             if (loaded.status() == RdbLoader.Status.FAILED) {
                 throw new IOException("RDB 복구 실패: " + loaded.error());
             }
@@ -110,12 +126,24 @@ public final class RedisServer implements AutoCloseable {
 
         running = true;
         commandLoop = new CommandLoop(keyspace, events, aof, snapshot, replication, this::close);
+        commandLoop.registry(registry);
+        commandLoop.port(serverSocket.getLocalPort());
+        if (masterHost != null) {
+            commandLoop.replicator().startAsReplica(masterHost, masterPort, loaded);
+        } else if (!aof.enabled() && snapshot != null) {
+            commandLoop.replicator().afterMasterLoad(loaded, expiredKeys);
+        }
         commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
     }
 
     /** 포트 0으로 열었으면 OS가 고른 포트 */
+    /** 복제 상태 - 테스트·대시보드 읽기용, 값은 실행 스레드가 바꿈 */
+    public Replicator replicator() {
+        return commandLoop.replicator();
+    }
+
     public int port() {
         return serverSocket.getLocalPort();
     }

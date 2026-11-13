@@ -7,7 +7,7 @@ import glassredis.persistence.AofLoader;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
-import glassredis.replication.ReplicationMaster;
+import glassredis.replication.Replicator;
 import glassredis.server.RedisServer;
 
 import java.io.IOException;
@@ -40,7 +40,7 @@ public final class Main {
         String dbFilename = rdbDefaults.filename();
         List<Snapshot.SaveParam> saveParams = rdbDefaults.saveParams();
         boolean stopWritesOnBgsaveError = rdbDefaults.stopWritesOnBgsaveError();
-        ReplicationMaster.Config repl = ReplicationMaster.Config.defaults();
+        Replicator.Config repl = Replicator.Config.defaults();
         boolean disklessSync = repl.disklessSync();
         long disklessSyncDelay = repl.disklessSyncDelay();
         long backlogSize = repl.backlogSize();
@@ -48,6 +48,9 @@ public final class Main {
         long pingPeriod = repl.pingPeriod();
         long replTimeout = repl.timeout();
         long[] replicaOutputLimit = {repl.outputHardLimit(), repl.outputSoftLimit(), repl.outputSoftSeconds()};
+        boolean replicaReadOnly = repl.replicaReadOnly();
+        String masterHost = null;
+        int masterPort = 0;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -79,6 +82,12 @@ public final class Main {
                 case "--repl-ping-replica-period" ->
                         pingPeriod = Long.parseLong(requireValue(args, ++i, "--repl-ping-replica-period"));
                 case "--repl-timeout" -> replTimeout = Long.parseLong(requireValue(args, ++i, "--repl-timeout"));
+                case "--replicaof", "--slaveof" -> {
+                    masterHost = requireValue(args, ++i, "--replicaof");
+                    masterPort = Integer.parseInt(requireValue(args, ++i, "--replicaof"));
+                }
+                case "--replica-read-only", "--slave-read-only" -> replicaReadOnly =
+                        yesNo(requireValue(args, ++i, "--replica-read-only"), "--replica-read-only");
                 case "--client-output-buffer-limit" -> replicaOutputLimit =
                         replicaOutputLimit(requireValue(args, ++i, "--client-output-buffer-limit"));
                 case "--help", "-h" -> {
@@ -102,10 +111,13 @@ public final class Main {
                 new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize, rdbPreamble),
                 events);
         Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError), events);
-        ReplicationMaster.Config replication = new ReplicationMaster.Config(disklessSync, disklessSyncDelay,
+        Replicator.Config replication = new Replicator.Config(disklessSync, disklessSyncDelay,
                 repl.disklessSyncMaxReplicas(), backlogSize, backlogTtl, pingPeriod, replTimeout,
-                replicaOutputLimit[0], replicaOutputLimit[1], replicaOutputLimit[2]);
+                replicaOutputLimit[0], replicaOutputLimit[1], replicaOutputLimit[2], replicaReadOnly);
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot, replication);
+        if (masterHost != null) {
+            server.replicaOf(masterHost, masterPort);
+        }
         server.start();
         reportAof(aof);
         reportRdb(snapshot);
@@ -251,6 +263,8 @@ public final class Main {
                   --repl-ping-replica-period <초>  복제 스트림에 PING 넣는 주기 (기본 10)
                   --repl-timeout <초>    레플리카 응답 없을 때 끊는 시간 (기본 60)
                   --client-output-buffer-limit "replica <hard> <soft> <초>"  레플리카 출력 버퍼 한도 (기본 256mb 64mb 60)
+                  --replicaof <host> <port>  기동하면 이 마스터의 레플리카로 (REPLICAOF 명령과 같음)
+                  --replica-read-only yes|no  레플리카일 때 쓰기 명령 거부 (기본 yes)
                   --help, -h             이 도움말
                 """);
     }
