@@ -15,7 +15,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * RDB 스냅샷 저장·복구 - rdb.c rdbSave, rdbSaveBackground, rdbLoad
@@ -88,7 +90,15 @@ public final class Snapshot {
      *
      * @param written 완료 값은 쓰기에 걸린 ns
      */
-    private record Bgsave(CompletableFuture<Long> written, long startNanos, String trigger, int bytes) {
+    private record Bgsave(CompletableFuture<Long> written, long startNanos, String trigger, int bytes,
+                          AtomicBoolean killed) {
+    }
+
+    /** killRDBChild 로 중단 - SIGUSR1 처럼 에러로 치지 않음 */
+    private static final class Killed extends RuntimeException {
+        Killed() {
+            super("killed", null, false, false);
+        }
     }
 
     private final Config config;
@@ -112,6 +122,8 @@ public final class Snapshot {
     private long lastBgsaveTry;
     /** server.lastbgsave_status */
     private boolean lastBgsaveOk = true;
+    /** 마지막으로 끝난 BGSAVE 의 종료 상태 - 중단도 실패 */
+    private boolean lastDoneOk = true;
     /** server.rdb_bgsave_scheduled - AOF 재작성 끝나면 시작 */
     private boolean bgsaveScheduled;
     /** stat_rdb_saves */
@@ -120,6 +132,9 @@ public final class Snapshot {
     private Bgsave bgsave;
 
     private RdbLoader.Result loadResult;
+
+    /** rdbPopulateSaveInfo - 복제 백로그 없으면 null */
+    private Supplier<RdbWriter.ReplInfo> replInfo = () -> null;
 
     public Snapshot(Config config) {
         this(config, EventBus.NONE);
@@ -179,6 +194,16 @@ public final class Snapshot {
         return bgsave != null;
     }
 
+    /** 저장 시점의 복제 정보 - 매 저장마다 호출, null 이면 보조 필드 생략 */
+    public void replInfo(Supplier<RdbWriter.ReplInfo> supplier) {
+        replInfo = supplier;
+    }
+
+    /** lastbgsave_status - checkDone() 이 true 를 낸 직후면 그 BGSAVE 의 결과 */
+    public boolean lastBgsaveOk() {
+        return lastBgsaveOk;
+    }
+
     public long saves() {
         return saves;
     }
@@ -227,15 +252,31 @@ public final class Snapshot {
         RdbWriter.Body body = serializeBody(keyspace);
         int bytes = body.finishedLength();
         publishStarted(trigger, true, keyspace.size(), System.nanoTime() - start, bytes);
+        AtomicBoolean killed = new AtomicBoolean();
         CompletableFuture<Long> written = CompletableFuture.supplyAsync(() -> {
             long writeStart = System.nanoTime();
-            String failure = writeFile(body.finish());
+            String failure = writeFile(body.finish(), killed);
             if (failure != null) {
                 throw new IllegalStateException(failure);
             }
             return System.nanoTime() - writeStart;
         }, saveThread);
-        bgsave = new Bgsave(written, start, trigger, bytes);
+        bgsave = new Bgsave(written, start, trigger, bytes, killed);
+    }
+
+    /**
+     * killRDBChild - 진행 중 BGSAVE 중단, 임시 파일 삭제
+     * 이미 파일을 확정했으면 효과 없음 (끝난 자식에 보낸 신호)
+     */
+    public void killBackground() {
+        if (bgsave != null) {
+            bgsave.killed().set(true);
+        }
+    }
+
+    /** 마지막으로 끝난 BGSAVE 가 정상 종료 - 중단·실패면 false (updateSlavesWaitingBgsave 의 bgsaveerr) */
+    public boolean lastDoneOk() {
+        return lastDoneOk;
     }
 
     /**
@@ -250,7 +291,13 @@ public final class Snapshot {
         Bgsave done = bgsave;
         bgsave = null;
         long total = System.nanoTime() - done.startNanos();
-        if (done.written().isCompletedExceptionally()) {
+        boolean killed = done.written().handle((ok, e) -> e != null && e.getCause() instanceof Killed).join();
+        lastDoneOk = !done.written().isCompletedExceptionally();
+        if (killed) {
+            // SIGUSR1 - lastbgsave_status 그대로
+            System.err.println("[glass-redis] 백그라운드 RDB 저장이 중단됐습니다 (신호 10)");
+            publishFailed(done.trigger(), true, "중단 - 기다리던 레플리카가 끊김");
+        } else if (done.written().isCompletedExceptionally()) {
             lastBgsaveOk = false;
             String reason = done.written().handle((ok, e) -> e.getCause() == null
                     ? e.getMessage() : e.getCause().getMessage()).join();
@@ -380,15 +427,28 @@ public final class Snapshot {
 
     private RdbWriter.Body serializeBody(Keyspace keyspace) {
         Runtime runtime = Runtime.getRuntime();
-        return RdbWriter.serialize(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory(), false);
+        return RdbWriter.serialize(keyspace, clock.getAsLong(), runtime.totalMemory() - runtime.freeMemory(), false,
+                replInfo.get(), true);
     }
 
-    /** 임시 파일 → fsync → 이름 바꾸기, 실패 시 임시 파일 삭제 */
     private String writeFile(byte[] content) {
+        return writeFile(content, new AtomicBoolean());
+    }
+
+    /**
+     * 임시 파일 → fsync → 이름 바꾸기, 실패 시 임시 파일 삭제
+     *
+     * @param killed 이름 바꾸기 전에 서면 임시 파일 지우고 Killed
+     */
+    private String writeFile(byte[] content, AtomicBoolean killed) {
         try {
             Files.createDirectories(config.dir());
             Files.write(temp, content);
             Fsync.file(temp);
+            if (killed.get()) {
+                Files.deleteIfExists(temp);
+                throw new Killed();
+            }
             Fsync.replace(temp, file);
         } catch (IOException e) {
             try {

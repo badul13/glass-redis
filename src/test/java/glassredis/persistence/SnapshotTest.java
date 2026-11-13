@@ -89,6 +89,32 @@ class SnapshotTest {
     }
 
     @Test
+    @DisplayName("BGSAVE 중단 - 파일 안 바뀜, lastsave·dirty 그대로, 에러로 안 침 (SIGUSR1)")
+    void killedBackgroundSave() throws Exception {
+        Snapshot snapshot = open("dump.rdb", true);
+        Keyspace keyspace = new Keyspace();
+        for (int i = 0; i < 20_000; i++) {
+            keyspace.put(Key.of("k" + i), Entry.of(("v" + i).getBytes(StandardCharsets.UTF_8)));
+        }
+        long lastSave = snapshot.lastSave();
+        snapshot.addDirty(3);
+        now.addAndGet(10);
+
+        snapshot.saveInBackground(keyspace, "복제");
+        snapshot.killBackground();
+        awaitDone(snapshot);
+
+        assertFalse(Files.exists(dir.resolve("dump.rdb")), "이름 바꾸기 전에 멈춤");
+        assertFalse(snapshot.lastDoneOk(), "기다리던 레플리카에는 실패로 알림");
+        assertFalse(snapshot.deniesWrites(), "lastbgsave_status 는 그대로 - 쓰기 거부 없음");
+        assertEquals(lastSave, snapshot.lastSave());
+        assertEquals(3, snapshot.dirty());
+        try (var files = Files.list(dir)) {
+            assertEquals(0, files.count(), "임시 파일도 삭제");
+        }
+    }
+
+    @Test
     @DisplayName("BGSAVE - 저장 중 들어온 변경은 dirty 에 남고, lastsave 갱신")
     void backgroundSave() throws Exception {
         Snapshot snapshot = open("dump.rdb", true);

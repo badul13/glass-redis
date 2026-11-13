@@ -73,7 +73,11 @@ public sealed interface RespValue {
     /** 출력 형태 - $-1\r\n */
     record Nil() implements RespValue {}
 
+    /** 응답 안 보냄 - REPLCONF ACK, 이미 레플리카인 연결의 SYNC */
+    record NoReply() implements RespValue {}
+
     RespValue NIL = new Nil();
+    RespValue NO_REPLY = new NoReply();
     SimpleString OK = new SimpleString("OK");
     SimpleString PONG = new SimpleString("PONG");
     Array EMPTY_ARRAY = new Array(List.of());

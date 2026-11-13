@@ -32,6 +32,8 @@ import glassredis.command.impl.PingCommand;
 import glassredis.command.impl.PopCommand;
 import glassredis.command.impl.PushCommand;
 import glassredis.command.impl.QuitCommand;
+import glassredis.command.impl.ReplconfCommand;
+import glassredis.command.impl.RoleCommand;
 import glassredis.command.impl.SaddCommand;
 import glassredis.command.impl.SaveCommand;
 import glassredis.command.impl.ScardCommand;
@@ -40,6 +42,7 @@ import glassredis.command.impl.SetCommand;
 import glassredis.command.impl.SismemberCommand;
 import glassredis.command.impl.SremCommand;
 import glassredis.command.impl.StrlenCommand;
+import glassredis.command.impl.SyncCommand;
 import glassredis.command.impl.TtlCommand;
 import glassredis.command.impl.TypeCommand;
 import glassredis.command.impl.ZaddCommand;
@@ -100,6 +103,11 @@ public final class CommandRegistry {
         registry.register(new BgsaveCommand());
         registry.register(new LastsaveCommand());
         registry.register(new ObjectCommand());
+
+        registry.register(new ReplconfCommand());
+        registry.register(SyncCommand.sync());
+        registry.register(SyncCommand.psync());
+        registry.register(new RoleCommand());
 
         registry.register(PushCommand.left());
         registry.register(PushCommand.right());

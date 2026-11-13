@@ -62,6 +62,7 @@ class PersistenceTest {
         do {
             Thread.sleep(5);
             persistence.cron();
+            persistence.scheduledBgsave();
         } while (persistence.childActive() || !done.getAsBoolean());
     }
 

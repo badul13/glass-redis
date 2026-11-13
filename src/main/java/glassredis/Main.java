@@ -7,6 +7,7 @@ import glassredis.persistence.AofLoader;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
+import glassredis.replication.ReplicationMaster;
 import glassredis.server.RedisServer;
 
 import java.io.IOException;
@@ -39,6 +40,14 @@ public final class Main {
         String dbFilename = rdbDefaults.filename();
         List<Snapshot.SaveParam> saveParams = rdbDefaults.saveParams();
         boolean stopWritesOnBgsaveError = rdbDefaults.stopWritesOnBgsaveError();
+        ReplicationMaster.Config repl = ReplicationMaster.Config.defaults();
+        boolean disklessSync = repl.disklessSync();
+        long disklessSyncDelay = repl.disklessSyncDelay();
+        long backlogSize = repl.backlogSize();
+        long backlogTtl = repl.backlogTtl();
+        long pingPeriod = repl.pingPeriod();
+        long replTimeout = repl.timeout();
+        long[] replicaOutputLimit = {repl.outputHardLimit(), repl.outputSoftLimit(), repl.outputSoftSeconds()};
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -61,6 +70,17 @@ public final class Main {
                         rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
                 case "--aof-use-rdb-preamble" -> rdbPreamble =
                         yesNo(requireValue(args, ++i, "--aof-use-rdb-preamble"), "--aof-use-rdb-preamble");
+                case "--repl-diskless-sync" -> disklessSync =
+                        yesNo(requireValue(args, ++i, "--repl-diskless-sync"), "--repl-diskless-sync");
+                case "--repl-diskless-sync-delay" ->
+                        disklessSyncDelay = Long.parseLong(requireValue(args, ++i, "--repl-diskless-sync-delay"));
+                case "--repl-backlog-size" -> backlogSize = memory(requireValue(args, ++i, "--repl-backlog-size"));
+                case "--repl-backlog-ttl" -> backlogTtl = Long.parseLong(requireValue(args, ++i, "--repl-backlog-ttl"));
+                case "--repl-ping-replica-period" ->
+                        pingPeriod = Long.parseLong(requireValue(args, ++i, "--repl-ping-replica-period"));
+                case "--repl-timeout" -> replTimeout = Long.parseLong(requireValue(args, ++i, "--repl-timeout"));
+                case "--client-output-buffer-limit" -> replicaOutputLimit =
+                        replicaOutputLimit(requireValue(args, ++i, "--client-output-buffer-limit"));
                 case "--help", "-h" -> {
                     printUsage();
                     return;
@@ -82,7 +102,10 @@ public final class Main {
                 new AppendOnlyLog.Config(dir, appendOnly, fsync, rewritePercentage, rewriteMinSize, rdbPreamble),
                 events);
         Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError), events);
-        RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot);
+        ReplicationMaster.Config replication = new ReplicationMaster.Config(disklessSync, disklessSyncDelay,
+                repl.disklessSyncMaxReplicas(), backlogSize, backlogTtl, pingPeriod, replTimeout,
+                replicaOutputLimit[0], replicaOutputLimit[1], replicaOutputLimit[2]);
+        RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot, replication);
         server.start();
         reportAof(aof);
         reportRdb(snapshot);
@@ -164,6 +187,22 @@ public final class Main {
         };
     }
 
+    /**
+     * client-output-buffer-limit 의 replica 클래스 - "replica <hard> <soft> <초>", slave 도 같은 뜻
+     * normal·pubsub 클래스는 이 서버에 해당 클라이언트 종류가 없어 받지 않음
+     */
+    private static long[] replicaOutputLimit(String value) {
+        String[] parts = value.trim().split("\\s+");
+        if (parts.length != 4) {
+            throw new IllegalArgumentException("--client-output-buffer-limit 에는 \"replica <hard> <soft> <초>\" 가 필요합니다");
+        }
+        String kind = parts[0].toLowerCase(Locale.ROOT);
+        if (!kind.equals("replica") && !kind.equals("slave")) {
+            throw new IllegalArgumentException("--client-output-buffer-limit 은 replica 클래스만 지원합니다: " + parts[0]);
+        }
+        return new long[]{memory(parts[1]), memory(parts[2]), Long.parseLong(parts[3])};
+    }
+
     /** Redis 메모리 표기 - 1k=1000, 1kb=1024, m·mb, g·gb */
     static long memory(String value) {
         String text = value.toLowerCase(Locale.ROOT);
@@ -205,6 +244,13 @@ public final class Main {
                   --auto-aof-rewrite-percentage <%>  마지막 재작성 대비 이만큼 커지면 자동 재작성 (기본 100, 0은 끔)
                   --auto-aof-rewrite-min-size <크기>  이보다 작으면 자동 재작성 안 함 (기본 64mb)
                   --aof-use-rdb-preamble yes|no  재작성 base 를 RDB 형식으로 (기본 yes, no 면 명령 나열)
+                  --repl-diskless-sync yes|no  레플리카에 RDB 를 파일 없이 소켓으로 (기본 yes)
+                  --repl-diskless-sync-delay <초>  디스크리스 전송 전 다른 레플리카를 기다림 (기본 5)
+                  --repl-backlog-size <크기>  끊긴 레플리카가 이어 받을 백로그 (기본 1mb)
+                  --repl-backlog-ttl <초>  레플리카 없이 이만큼 지나면 백로그 해제 (기본 3600, 0은 안 함)
+                  --repl-ping-replica-period <초>  복제 스트림에 PING 넣는 주기 (기본 10)
+                  --repl-timeout <초>    레플리카 응답 없을 때 끊는 시간 (기본 60)
+                  --client-output-buffer-limit "replica <hard> <soft> <초>"  레플리카 출력 버퍼 한도 (기본 256mb 64mb 60)
                   --help, -h             이 도움말
                 """);
     }

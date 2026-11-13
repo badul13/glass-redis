@@ -1,5 +1,6 @@
 package glassredis.server;
 
+import glassredis.command.Client;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
@@ -11,6 +12,7 @@ import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.Snapshot;
+import glassredis.replication.ReplicationMaster;
 import glassredis.resp.RespValue;
 import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
@@ -45,6 +47,9 @@ final class CommandLoop implements AutoCloseable {
     /** Redis hz 기본값 */
     private static final int HZ = ActiveExpireCycle.HZ;
 
+    private static final byte[] MULTI = "MULTI".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] EXEC = "EXEC".getBytes(StandardCharsets.US_ASCII);
+
     /** 무제한 큐 - 커넥션당 명령 묶음 1개 + 주기 작업 1개라 최대 커넥션 수 + 1 */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
 
@@ -69,6 +74,12 @@ final class CommandLoop implements AutoCloseable {
     /** AOF 재작성·BGSAVE 조율 */
     private final Persistence persistence;
 
+    /** 마스터 쪽 복제 */
+    private final ReplicationMaster master;
+
+    /** server.cronloops - 1초 주기 작업 판단 */
+    private long cronLoops;
+
     /** 실행했지만 아직 안 보낸 응답 - AOF write 뒤 전달 (beforeSleep의 handleClientsWithPendingWrites) */
     private final List<Runnable> pendingReplies = new ArrayList<>();
 
@@ -91,9 +102,22 @@ final class CommandLoop implements AutoCloseable {
      * @param snapshot null이면 SAVE·BGSAVE 실패
      */
     CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Snapshot snapshot, Runnable onFatalError) {
+        this(keyspace, events, aof, snapshot, ReplicationMaster.Config.defaults(), onFatalError);
+    }
+
+    /** @param replication 복제 설정 */
+    CommandLoop(Keyspace keyspace, EventBus events, AppendOnlyLog aof, Snapshot snapshot,
+                ReplicationMaster.Config replication, Runnable onFatalError) {
         this.aof = aof;
         this.persistence = new Persistence(keyspace, aof, snapshot);
-        this.context = new Context(keyspace, new Propagation(), persistence);
+        this.master = new ReplicationMaster(replication, keyspace, persistence, queue::add,
+                () -> System.currentTimeMillis() / 1000);
+        persistence.replication(master);
+        if (snapshot != null) {
+            // 모든 RDB 저장에 복제 위치 (rdbPopulateSaveInfo)
+            snapshot.replInfo(master::saveInfo);
+        }
+        this.context = new Context(keyspace, new Propagation(), persistence, master);
         this.events = events;
         // 만료 삭제는 DEL로 전파 - 명령 중이면 그 명령과 묶고, 주기적 만료면 단독
         keyspace.setExpiredListener(key -> {
@@ -101,7 +125,7 @@ final class CommandLoop implements AutoCloseable {
             if (context.propagation().active()) {
                 context.propagation().also(del);
             } else {
-                aof.feedAll(List.of(del));
+                propagate(List.of(del));
             }
         });
         this.activeExpire = new ActiveExpireCycle(keyspace, events);
@@ -120,30 +144,49 @@ final class CommandLoop implements AutoCloseable {
      * @param connectionId 이벤트 표시용 - 실행과 무관
      */
     CompletableFuture<RespValue> submit(Command command, List<byte[]> argv, long connectionId) {
-        return submitAll(List.of(new Request(command, argv)), connectionId).thenApply(replies -> replies.get(0));
+        return submitAll(List.of(new Request(command, argv)), new Client(connectionId, null, 0))
+                .thenApply(replies -> replies.get(0));
     }
 
     /**
      * 한 커넥션이 한 번에 받은 명령들 - 큐 작업 1개로 연달아 실행 (processInputBuffer)
      * 사이에 다른 커넥션 명령·주기 작업 안 끼어듦, 응답은 beforeSleep 에서 한꺼번에 전달
      *
-     * @param requests     받은 순서, 비어 있으면 안 됨
-     * @param connectionId 이벤트 표시용 - 실행과 무관
-     * @return 요청과 같은 순서의 응답
+     * @param requests 받은 순서, 비어 있으면 안 됨
+     * @param client   보낸 커넥션 - 복제 명령이 상태를 바꿈
+     * @return 요청과 같은 순서의 응답 - 레플리카가 된 연결이면 전부 NO_REPLY
      */
-    CompletableFuture<List<RespValue>> submitAll(List<Request> requests, long connectionId) {
+    CompletableFuture<List<RespValue>> submitAll(List<Request> requests, Client client) {
         CompletableFuture<List<RespValue>> replies = new CompletableFuture<>();
         queue.add(() -> {
+            // 묶음 시작 시 보낼 응답 없음 - 앞 묶음은 이미 flush 됨
+            client.pendingReplies(false);
             List<RespValue> results = new ArrayList<>(requests.size());
             for (Request request : requests) {
-                results.add(request.command() == null
+                RespValue reply = request.command() == null
                         ? Errors.unknownCommand(request.argv().get(0),
                                 request.argv().subList(1, request.argv().size()))
-                        : execute(request.command(), request.argv(), connectionId));
+                        : execute(request.command(), request.argv(), client);
+                if (!(reply instanceof RespValue.NoReply)) {
+                    if (client.isReplica()) {
+                        // 복제 링크는 응답용이 아님 - 응답이 생기면 끊음
+                        master.replicaGeneratedReply(client, new String(request.argv().get(0),
+                                StandardCharsets.ISO_8859_1));
+                        reply = RespValue.NO_REPLY;
+                    } else {
+                        client.pendingReplies(true);
+                    }
+                }
+                results.add(reply);
             }
             pendingReplies.add(() -> replies.complete(results));
         });
         return replies;
+    }
+
+    /** 커넥션이 끝남 - 레플리카였으면 정리 */
+    void clientClosed(Client client) {
+        queue.add(() -> master.clientClosed(client));
     }
 
     /**
@@ -208,6 +251,7 @@ final class CommandLoop implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
+        master.close();
         if (save && !fatal) {
             persistence.shutdown();
         } else {
@@ -235,15 +279,22 @@ final class CommandLoop implements AutoCloseable {
         keyspace.tryResizeHashTables();
         keyspace.incrementallyRehash();
         persistence.cron();
+        // run_with_period(1000) - 첫 호출부터 HZ 번마다
+        if (cronLoops % HZ == 0) {
+            master.cron();
+        }
+        persistence.scheduledBgsave();
+        cronLoops++;
     }
 
     /**
      * 큐가 비어 쉬기 직전 - Redis beforeSleep 순서
-     * FAST 만료(DEL 전파 생길 수 있음) → AOF write → 응답 전달
+     * FAST 만료(DEL 전파 생길 수 있음) → AOF write → 레플리카에 스트림 → 응답 전달
      */
     private void beforeSleep() {
         activeExpire.run(ActiveExpireCycle.Kind.FAST);
         aof.flush();
+        master.beforeSleep();
         if (!pendingReplies.isEmpty()) {
             pendingReplies.forEach(Runnable::run);
             pendingReplies.clear();
@@ -272,8 +323,36 @@ final class CommandLoop implements AutoCloseable {
         }
     }
 
-    /** call() - 실행 후 dirty면 AOF로 전파 */
-    private RespValue execute(Command command, List<byte[]> argv, long connectionId) {
+    /**
+     * propagatePendingCommands - 둘 이상이면 MULTI/EXEC 로 감쌈
+     * AOF 도 복제도 꺼져 있으면 아무것도 안 함 (shouldPropagate)
+     */
+    private void propagate(List<List<byte[]>> commands) {
+        if (commands.isEmpty() || (!aof.enabled() && !master.propagating())) {
+            return;
+        }
+        boolean transaction = commands.size() > 1;
+        if (transaction) {
+            propagateNow(-1, List.of(MULTI));
+        }
+        for (List<byte[]> argv : commands) {
+            propagateNow(0, argv);
+        }
+        if (transaction) {
+            propagateNow(-1, List.of(EXEC));
+        }
+    }
+
+    /** propagateNow - AOF 버퍼와 복제 스트림에 같이 */
+    private void propagateNow(int dbid, List<byte[]> argv) {
+        aof.feed(dbid, argv);
+        master.feed(dbid, argv);
+    }
+
+    /** call() - 실행 후 dirty면 AOF·레플리카로 전파 */
+    private RespValue execute(Command command, List<byte[]> argv, Client client) {
+        long connectionId = client.id();
+        context.client(client);
         // 관측 꺼짐 시 nanoTime() 비용도 생략
         long startNanos = events.enabled() ? System.nanoTime() : 0;
         List<byte[]> args = argv.subList(1, argv.size());
@@ -297,7 +376,7 @@ final class CommandLoop implements AutoCloseable {
             }
             // 예외로 끝나도 이미 바꾼 만큼은 기록
             persistence.afterCommand(context.propagation().dirtyCount());
-            aof.feedAll(context.propagation().finish());
+            propagate(context.propagation().finish());
         }
 
         if (events.enabled()) {

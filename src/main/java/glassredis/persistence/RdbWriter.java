@@ -43,10 +43,31 @@ public final class RdbWriter {
      * EOF·CRC64 는 Body.finish() - 백그라운드 스레드 몫 (Redis 는 자식 프로세스가 쓰면서 체크섬 계산)
      */
     public static Body serialize(Keyspace keyspace, long ctimeSeconds, long usedMemory, boolean aofBase) {
+        return serialize(keyspace, ctimeSeconds, usedMemory, aofBase, null, true);
+    }
+
+    /**
+     * @param repl        복제 정보 보조 필드 - null 이면 생략 (rdbSaveInfo 없음)
+     * @param includeData false 면 키 없이 보조 필드만 (SLAVE_REQ_RDB_EXCLUDE_DATA)
+     */
+    public static Body serialize(Keyspace keyspace, long ctimeSeconds, long usedMemory, boolean aofBase,
+                                 ReplInfo repl, boolean includeData) {
         RdbWriter writer = new RdbWriter();
-        writer.header(ctimeSeconds, usedMemory, aofBase);
-        writer.database(keyspace);
+        writer.header(ctimeSeconds, usedMemory, aofBase, repl);
+        if (includeData) {
+            writer.database(keyspace);
+        }
         return new Body(writer.out.bytes, writer.out.size);
+    }
+
+    /**
+     * rdbSaveInfo 중 파일에 남는 것 - 레플리카가 이어 받을 위치
+     *
+     * @param streamDb 복제 스트림이 마지막으로 SELECT 한 DB
+     * @param replid   마스터 복제 ID 40자
+     * @param offset   이 스냅샷 시점의 master_repl_offset
+     */
+    public record ReplInfo(int streamDb, String replid, long offset) {
     }
 
     /**
@@ -76,13 +97,18 @@ public final class RdbWriter {
         }
     }
 
-    /** "REDIS0011" + 보조 필드 - rdbSaveInfoAuxFields, 복제 정보(rsi) 없음 */
-    private void header(long ctimeSeconds, long usedMemory, boolean aofBase) {
+    /** "REDIS0011" + 보조 필드 - rdbSaveInfoAuxFields, 복제 정보는 used-mem 과 aof-base 사이 */
+    private void header(long ctimeSeconds, long usedMemory, boolean aofBase, ReplInfo repl) {
         out.writeBytes(String.format("REDIS%04d", RdbFormat.VERSION).getBytes(StandardCharsets.US_ASCII));
         aux("redis-ver", RdbFormat.REDIS_VERSION);
         aux("redis-bits", "64");
         aux("ctime", Long.toString(ctimeSeconds));
         aux("used-mem", Long.toString(usedMemory));
+        if (repl != null) {
+            aux("repl-stream-db", Integer.toString(repl.streamDb()));
+            aux("repl-id", repl.replid());
+            aux("repl-offset", Long.toString(repl.offset()));
+        }
         aux("aof-base", aofBase ? "1" : "0");
     }
 

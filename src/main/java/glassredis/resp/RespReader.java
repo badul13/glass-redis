@@ -139,7 +139,7 @@ public final class RespReader {
      *
      * @return 따옴표 불균형이면 null
      */
-    static List<byte[]> splitArgs(byte[] line, int length) {
+    public static List<byte[]> splitArgs(byte[] line, int length) {
         List<byte[]> argv = new ArrayList<>();
         int p = 0;
         while (true) {

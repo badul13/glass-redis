@@ -47,6 +47,7 @@ final class Display {
             case RespValue.BulkString bulk -> text(bulk.bytes());
             case RespValue.Array array -> "(" + array.items().size() + "개)";
             case RespValue.Nil ignored -> "(nil)";
+            case RespValue.NoReply ignored -> "(응답 없음)";
         };
     }
 

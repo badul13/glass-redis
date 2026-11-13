@@ -9,6 +9,7 @@ import glassredis.observe.SortedSetSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
+import glassredis.replication.ReplicationMaster;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 
@@ -44,6 +45,8 @@ public final class RedisServer implements AutoCloseable {
     /** null이면 RDB 없음 - 기동 로드 생략, SAVE 실패 (현재 폴더 dump.rdb 를 테스트가 읽지 않도록) */
     private final Snapshot snapshot;
 
+    private final ReplicationMaster.Config replication;
+
     private final AtomicLong nextConnectionId = new AtomicLong(1);
     private final CountDownLatch stopped = new CountDownLatch(1);
 
@@ -66,6 +69,13 @@ public final class RedisServer implements AutoCloseable {
 
     public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events, AppendOnlyLog aof,
                        Snapshot snapshot) {
+        this(bindAddress, port, registry, events, aof, snapshot, ReplicationMaster.Config.defaults());
+    }
+
+    /** @param replication 복제 설정 (repl-*) */
+    public RedisServer(String bindAddress, int port, CommandRegistry registry, EventBus events, AppendOnlyLog aof,
+                       Snapshot snapshot, ReplicationMaster.Config replication) {
+        this.replication = replication;
         this.bindAddress = bindAddress;
         this.requestedPort = port;
         this.registry = registry;
@@ -99,7 +109,7 @@ public final class RedisServer implements AutoCloseable {
         serverSocket.bind(new InetSocketAddress(bindAddress, requestedPort), BACKLOG);
 
         running = true;
-        commandLoop = new CommandLoop(keyspace, events, aof, snapshot, this::close);
+        commandLoop = new CommandLoop(keyspace, events, aof, snapshot, replication, this::close);
         commandLoop.start();
         connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
         Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);

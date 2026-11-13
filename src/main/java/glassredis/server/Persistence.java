@@ -4,15 +4,18 @@ import glassredis.command.ServerControl;
 import glassredis.observe.RdbSnapshot;
 import glassredis.persistence.AppendOnlyLog;
 import glassredis.persistence.Snapshot;
+import glassredis.replication.ReplicationMaster;
 import glassredis.resp.RespValue;
 import glassredis.store.Keyspace;
+
+import java.nio.file.Path;
 
 /**
  * AOF 재작성·BGSAVE 조율 - 백그라운드 작업은 한 번에 하나 (hasActiveChildProcess)
  * 겹치면 예약해 두고 serverCron 에서 시작
  * 실행 스레드 전용
  */
-final class Persistence implements ServerControl {
+final class Persistence implements ServerControl, ReplicationMaster.Children {
 
     private static final RespValue MISCONF = new RespValue.Err("MISCONF Redis is configured to save RDB snapshots, "
             + "but it's currently unable to persist to disk. Commands that may modify the data set are disabled, "
@@ -30,13 +33,61 @@ final class Persistence implements ServerControl {
         this.snapshot = snapshot;
     }
 
+    /** 디스크리스 전송도 자식 작업 - 생성 뒤 연결 */
+    private ReplicationMaster replication;
+
+    void replication(ReplicationMaster master) {
+        this.replication = master;
+    }
+
     private boolean saving() {
         return snapshot != null && snapshot.saving();
     }
 
+    /** child_type == CHILD_TYPE_RDB - 디스크 BGSAVE 또는 디스크리스 전송 */
+    private boolean rdbChildActive() {
+        return saving() || (replication != null && replication.socketChildActive());
+    }
+
     /** hasActiveChildProcess */
     boolean childActive() {
+        return active() || (replication != null && replication.socketChildActive());
+    }
+
+    @Override
+    public boolean active() {
         return aof.rewriting() || saving();
+    }
+
+    @Override
+    public boolean diskBgsaveActive() {
+        return saving();
+    }
+
+    @Override
+    public boolean startDiskBgsave() {
+        if (snapshot == null) {
+            return false;
+        }
+        snapshot.saveInBackground(keyspace, "복제");
+        return true;
+    }
+
+    @Override
+    public Path rdbFile() {
+        return snapshot == null ? null : snapshot.file();
+    }
+
+    @Override
+    public boolean saveRulesEmpty() {
+        return snapshot == null || snapshot.config().saveParams().isEmpty();
+    }
+
+    @Override
+    public void killDiskBgsave() {
+        if (snapshot != null) {
+            snapshot.killBackground();
+        }
     }
 
     /** call() 뒤 - 이번 명령의 변경 횟수 누적 */
@@ -74,7 +125,7 @@ final class Persistence implements ServerControl {
         if (snapshot == null) {
             return ServerControl.NONE.save();
         }
-        if (saving()) {
+        if (rdbChildActive()) {
             return new RespValue.Err("ERR Background save already in progress");
         }
         String failure = snapshot.save(keyspace, "SAVE");
@@ -90,7 +141,7 @@ final class Persistence implements ServerControl {
         if (snapshot == null) {
             return ServerControl.NONE.bgsave(schedule);
         }
-        if (saving()) {
+        if (rdbChildActive()) {
             return new RespValue.Err("ERR Background save already in progress");
         }
         if (childActive()) {
@@ -117,7 +168,8 @@ final class Persistence implements ServerControl {
 
     /**
      * serverCron 의 저장 부분 - Redis 순서
-     * 예약된 재작성 → 끝난 작업 처리 또는 save 규칙·자동 재작성 → 예약된 BGSAVE
+     * 예약된 재작성 → 끝난 작업 처리(checkChildrenDone) 또는 save 규칙·자동 재작성
+     * 예약된 BGSAVE 는 replicationCron 뒤 scheduledBgsave()
      */
     void cron() {
         if (!childActive() && aof.rewriteScheduled()) {
@@ -125,8 +177,12 @@ final class Persistence implements ServerControl {
         }
         if (childActive()) {
             aof.checkRewriteDone();
-            if (snapshot != null) {
-                snapshot.checkDone();
+            if (snapshot != null && snapshot.checkDone() && replication != null) {
+                // backgroundSaveDoneHandler → updateSlavesWaitingBgsave
+                replication.backgroundSaveDone(snapshot.lastDoneOk(), false);
+            }
+            if (replication != null) {
+                replication.checkSocketChildDone();
             }
         } else {
             Snapshot.SaveParam due = snapshot == null ? null : snapshot.dueSaveParam();
@@ -138,6 +194,10 @@ final class Persistence implements ServerControl {
                 aof.autoRewrite(keyspace);
             }
         }
+    }
+
+    /** serverCron 끝 - 예약된 BGSAVE 시작 */
+    void scheduledBgsave() {
         if (!childActive() && snapshot != null && snapshot.scheduledBgsaveDue()) {
             snapshot.saveInBackground(keyspace, "예약된 BGSAVE");
         }

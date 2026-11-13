@@ -34,6 +34,8 @@ public final class RespWriter {
                 }
             }
             case RespValue.Nil ignored -> out.write(NULL_BULK);
+            case RespValue.NoReply ignored -> {
+            }
         }
     }
 

@@ -219,6 +219,22 @@ public final class AppendOnlyLog implements AutoCloseable {
         remember(argv);
     }
 
+    /**
+     * propagateNow 의 AOF 쪽 - feedAppendOnlyFile(dbid, ...)
+     *
+     * @param dbid -1 이면 SELECT 없이 (MULTI·EXEC)
+     */
+    public void feed(int dbid, List<byte[]> argv) {
+        if (!config.enabled()) {
+            return;
+        }
+        if (dbid < 0) {
+            feedWithoutSelect(argv);
+        } else {
+            feed(argv);
+        }
+    }
+
     /** 명령 하나가 여러 전파를 낳으면 트랜잭션으로 - propagatePendingCommands */
     public void feedAll(List<List<byte[]>> commands) {
         if (!config.enabled() || commands.isEmpty()) {
