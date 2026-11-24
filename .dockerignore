@@ -1,0 +1,13 @@
+.git
+.gradle
+.idea
+.vscode
+build
+dashboard/node_modules
+dashboard/dist
+docs
+data
+appendonlydir
+*.rdb
+*.aof
+PLAN.md

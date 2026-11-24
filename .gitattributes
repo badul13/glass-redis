@@ -1,0 +1,4 @@
+# 컨테이너(리눅스)에서 실행 - 윈도우 체크아웃도 LF 유지
+gradlew text eol=lf
+*.bat text eol=crlf
+*.sh text eol=lf
