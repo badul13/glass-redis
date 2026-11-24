@@ -6,7 +6,7 @@ Redis 서버를 Java로 직접 구현해 **내부에서 벌어지는 일을 실�
 
 ## 현재 상태
 
-- 명령어 68개
+- 명령어 77개
   - 문자열·만료(`SET` `GET` `EXPIRE` `TTL` …)와 List·Hash·Set·Sorted Set, `redis-cli` 로 그대로 접속
 - Redis 7 기준으로 동일하게 맞추며 진행
 - 서버 내부를 실시간으로 그리는 대시보드
@@ -15,6 +15,8 @@ Redis 서버를 Java로 직접 구현해 **내부에서 벌어지는 일을 실�
   (파일 구성·기록 내용은 Redis 7 과 동일, 대시보드에 쌓이고 fsync 되고 압축되는 과정 표시)
 - RDB 스냅샷 - `SAVE` `BGSAVE`, save 규칙에 따른 자동 저장, 종료 시 저장, 기동 시 `dump.rdb` 복구
   (Redis 7.2 와 같은 바이트라 서로의 파일을 읽음, AOF 재작성 base 도 RDB 형식)
+- 복제 - `REPLICAOF`, 전체·부분 동기화, 끊겨도 백로그로 이어 받기
+  (Redis 7.2 와 섞어 붙음 - Redis 레플리카가 glass 마스터에, glass 레플리카가 Redis 마스터에)
 
 만료된 키가 **언제 실제로 지워지는지**를 대시보드로 표기
 `EX 10` 을 걸어도 10초에 지워지지 않고, 읽으러 온 명령이 발견하거나 100ms 마다 도는
@@ -63,21 +65,41 @@ RDB 는 Redis 처럼 기본 save 규칙(`3600 1 300 100 60 10000`)으로 켜짐:
 
 RDB 옵션: `--dir` `--dbfilename` `--save` `--stop-writes-on-bgsave-error`
 
+복제는 Redis 처럼 레플리카 쪽에서 마스터를 지정:
+
+```bash
+./gradlew run --args="--port 6381 --dashboard-port 8081 --replicaof 127.0.0.1 6380"
+```
+
+복제 옵션: `--replicaof` `--replica-read-only` `--repl-diskless-sync` `--repl-diskless-sync-delay` `--repl-backlog-size` `--repl-backlog-ttl` `--repl-ping-replica-period` `--repl-timeout` `--client-output-buffer-limit`
+
+## Docker
+
+```bash
+docker build -t glass-redis .
+docker run -p 6380:6380 -p 8080:8080 -v glass-data:/data glass-redis --appendonly yes
+```
+
+- 옵션은 이미지 이름 뒤에 그대로 이어 붙임
+- `dump.rdb`·`appendonlydir` 은 `/data` 볼륨에 남음
+
 ## 처리량
 
 실제 Redis 7.2.4 와 같은 조건으로 `redis-benchmark` 테스트 (초당 요청 수, 3회 중앙값)
 
 | | Redis 7.2.4 | glass-redis |
 |---|---:|---:|
-| `SET` | 13.1만 | 6.1만 |
-| `GET` | 12.8만 | 6.3만 |
-| `SET` 파이프라인 16 | 79만 | 56만 |
-| `GET` 파이프라인 16 | 94만 | 74만 |
-| `SET` 파이프라인 16, AOF everysec | 44만 | 54만 |
-| `BGSAVE` 동안 명령이 멈추는 시간 (키 26만 개) | 약 1ms | 17~46ms |
+| `SET` | 9.7만 | 5.3만 |
+| `GET` | 9.1만 | 5.3만 |
+| `SET` 파이프라인 16 | 95.8만 | 58.1만 |
+| `GET` 파이프라인 16 | 93.8만 | 59.8만 |
+| `SET` 파이프라인 16, AOF everysec | 61.9만 | 39.0만 |
+| `BGSAVE` 동안 명령이 멈추는 시간 (키 26만 개) | 1ms | 46ms |
 
 - 서버·벤치마크 모두 Docker 컨테이너, 각각 `--cpus 2` (i5-1240P, Docker Desktop WSL2)
-- `redis-benchmark -t set,get -n 300000 -c 50 [-P 16]`, 대시보드 X
+- `redis-benchmark -t set,get -n 300000 -c 50 [-P 16]`, 대시보드 X, 예열 1회 제외 (JVM 은 JIT 전 첫 회차가 절반 수준)
+- `BGSAVE` 정지는 그동안 `redis-cli --latency` 로 잰 최대 지연
+- 재현: `bash bench/bench.sh`
 
 ## 라이선스
 
