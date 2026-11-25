@@ -9,6 +9,7 @@ import glassredis.store.SetValue;
 import glassredis.store.SortedSetValue;
 import glassredis.store.StringValue;
 import glassredis.store.Value;
+import glassredis.store.encoding.Dict;
 import glassredis.store.encoding.Intset;
 import glassredis.store.encoding.Listpack;
 import glassredis.store.encoding.Quicklist;
@@ -89,7 +90,8 @@ public final class RdbLoader {
     private RdbLoader(byte[] data, Keyspace keyspace, boolean aofPreamble, Options options) {
         this.data = data;
         this.keyspace = keyspace;
-        this.now = keyspace.now();
+        // rdbLoad 의 now = mstime() - 명령 시각 스냅샷이 아닌 지금 시계
+        this.now = keyspace.clockMillis();
         this.aofPreamble = aofPreamble;
         this.options = options;
     }
@@ -165,6 +167,9 @@ public final class RdbLoader {
         try {
             run();
         } catch (CorruptRdbException e) {
+            error = e.getMessage();
+        } catch (Dict.ExpandFailedException e) {
+            // dictTryExpand 실패 - rdbReportCorruptRDB("OOM in dictTryExpand %llu")
             error = e.getMessage();
         } catch (RuntimeException e) {
             // listpack 속이 깨져 걷다가 범위를 벗어난 경우 등

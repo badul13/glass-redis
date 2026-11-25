@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.HashValue;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
@@ -36,9 +36,6 @@ public final class HincrbyCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 3) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         OptionalLong amount = Numbers.parseLong(args.get(2));
         if (amount.isEmpty()) {
             return Errors.notAnInteger();
@@ -46,14 +43,16 @@ public final class HincrbyCommand implements Command {
 
         Keyspace keyspace = ctx.keyspace();
         Key key = new Key(args.get(0));
-        Entry entry = keyspace.get(key);
+        Lookup<HashValue> found = Lookup.hashWrite(ctx, key, null);
+        if (found.reply() != null) {
+            return found.reply();
+        }
+        boolean created = found.value() == null;
         HashValue hash;
-        if (entry == null) {
+        if (created) {
             hash = new HashValue();
-        } else if (entry.value() instanceof HashValue existing) {
-            hash = existing;
         } else {
-            return Errors.wrongType();
+            hash = found.value();
         }
 
         Key field = new Key(args.get(1));
@@ -77,8 +76,8 @@ public final class HincrbyCommand implements Command {
         hash.set(field, Numbers.toBytes(updated));
         ctx.dirty();
         // 실패 시 빈 Hash 잔존 방지 - 검사 후 삽입
-        if (entry == null) {
-            keyspace.put(key, Entry.of(hash));
+        if (created) {
+            keyspace.add(key, hash);
         }
         return new RespValue.Int(updated);
     }

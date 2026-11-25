@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.ScoreRanges;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ScoreRange;
 import glassredis.store.SortedSetValue;
@@ -27,21 +27,16 @@ public final class ZcountCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 3) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         ScoreRange range = ScoreRanges.parse(args.get(1), args.get(2));
         if (range == null) {
             return Errors.minOrMaxNotAFloat();
         }
 
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return new RespValue.Int(0);
+        Lookup<SortedSetValue> found = Lookup.zset(ctx, new Key(args.get(0)), new RespValue.Int(0));
+        if (found.reply() != null) {
+            return found.reply();
         }
-        if (!(entry.value() instanceof SortedSetValue zset)) {
-            return Errors.wrongType();
-        }
+        SortedSetValue zset = found.value();
 
         long first = zset.firstRankIn(range);
         long last = zset.lastRankIn(range);

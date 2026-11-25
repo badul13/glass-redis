@@ -45,9 +45,10 @@ public final class Errors {
                 "ERR wrong number of arguments for '" + commandName.toLowerCase(Locale.ROOT) + "' command");
     }
 
-    /** 하위 명령은 받은 그대로, 명령 이름은 대문자 */
-    public static RespValue.Err unknownSubcommand(String subcommand, String commandName) {
-        return new RespValue.Err(newlinesToSpaces("ERR unknown subcommand '" + subcommand + "'. Try "
+    /** 하위 명령 - %.128s (NUL 에서 끊고 128바이트까지), 명령 이름은 대문자 */
+    public static RespValue.Err unknownSubcommand(byte[] subcommand, String commandName) {
+        return new RespValue.Err(newlinesToSpaces("ERR unknown subcommand '"
+                + wire(cString(subcommand, ECHOED_INPUT_LIMIT)) + "'. Try "
                 + commandName.toUpperCase(Locale.ROOT) + " HELP."));
     }
 
@@ -130,6 +131,33 @@ public final class Errors {
 
     public static RespValue.Err expireGtLtNotCompatible() {
         return new RespValue.Err("ERR GT and LT options at the same time are not compatible");
+    }
+
+    /** shared.err - SAVE·BGSAVE 실패 */
+    public static RespValue.Err bare() {
+        return new RespValue.Err("ERR");
+    }
+
+    /** getRangeLongFromObjectOrReply 의 범위 밖 - int 인자 (SELECT) */
+    public static RespValue.Err outOfIntRange() {
+        return new RespValue.Err("ERR value is out of range, value must between "
+                + Integer.MIN_VALUE + " and " + Integer.MAX_VALUE);
+    }
+
+    public static RespValue.Err dbIndexOutOfRange() {
+        return new RespValue.Err("ERR DB index is out of range");
+    }
+
+    /** OBJECT FREQ - maxmemory-policy 가 LFU 아님 */
+    public static RespValue.Err lfuNotSelected() {
+        return new RespValue.Err("ERR An LFU maxmemory policy is not selected, access frequency not tracked. "
+                + "Please note that when switching between policies at runtime LRU and LFU data will take some "
+                + "time to adjust.");
+    }
+
+    /** 이 서버 고유 문구 - 소켓 없는 테스트·AOF 복구용 Context 에서 서버 기능 호출 */
+    public static RespValue.Err notAvailable(String feature) {
+        return new RespValue.Err("ERR " + feature + " is not available");
     }
 
     public static RespValue.Err protocol(String message) {

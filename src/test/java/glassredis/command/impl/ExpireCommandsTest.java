@@ -1,8 +1,12 @@
 package glassredis.command.impl;
 
 import glassredis.resp.RespValue;
+import glassredis.store.Key;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static glassredis.command.impl.CommandTester.bulk;
 import static glassredis.command.impl.CommandTester.error;
@@ -32,7 +36,7 @@ class ExpireCommandsTest {
         run("SET", "k", "v", "PX", "100");
 
         advance(100);
-        assertEquals(bulk("v"), run("GET", "k"), "만료 시각과 같은 ms 에는 아직 살아 있다");
+        assertEquals(bulk("v"), run("GET", "k"), "만료 시각과 같은 ms 의 생존");
 
         advance(1);
         assertEquals(RespValue.NIL, run("GET", "k"));
@@ -139,7 +143,7 @@ class ExpireCommandsTest {
         run("SET", "k", "v");
 
         assertEquals(integer(1), run("EXPIRE", "k", "0"));
-        assertEquals(0, tester.keyspace.size(), "메모리에서도 바로 사라져야 한다");
+        assertEquals(0, tester.keyspace.size(), "메모리에서도 즉시 삭제");
         assertEquals(integer(0), run("EXISTS", "k"));
     }
 
@@ -181,8 +185,8 @@ class ExpireCommandsTest {
     void expireGtLt() {
         run("SET", "k", "v");
 
-        assertEquals(integer(0), run("EXPIRE", "k", "10", "GT"), "무한대보다 늦을 수는 없다");
-        assertEquals(integer(1), run("EXPIRE", "k", "50", "LT"), "무한대보다는 무엇이든 이르다");
+        assertEquals(integer(0), run("EXPIRE", "k", "10", "GT"), "무한대보다 늦은 시각 없음");
+        assertEquals(integer(1), run("EXPIRE", "k", "50", "LT"), "무한대보다 이른 시각");
         assertEquals(integer(0), run("EXPIRE", "k", "60", "LT"));
         assertEquals(integer(1), run("EXPIRE", "k", "40", "lt"));
         assertEquals(integer(0), run("EXPIRE", "k", "30", "GT"));
@@ -246,6 +250,54 @@ class ExpireCommandsTest {
 
         assertEquals(integer(1), run("INCR", "n"));
         assertEquals(integer(-1), run("TTL", "n"));
+    }
+
+    @Test
+    @DisplayName("레플리카의 지난 시각 EXPIRE - 삭제 없이 만료 시각만 저장, PEXPIREAT 로 전파")
+    void replicaKeepsAlreadyExpiredKey() {
+        run("SET", "k", "v");
+        tester.keyspace.setReplica(true);
+        tester.propagated.clear();
+
+        assertEquals(integer(1), run("EXPIRE", "k", "-1"));
+        assertEquals(1, tester.keyspace.size(), "마스터의 DEL 대기 - 메모리에 유지");
+        assertEquals(tester.clock.millis() - 1000, tester.keyspace.peek(new Key(bytes("k")))
+                .expireAtMillis());
+        assertEquals(List.of("PEXPIREAT k " + (tester.clock.millis() - 1000)), tester.propagated);
+    }
+
+    @Test
+    @DisplayName("SET PX·EX 넘침은 invalid expire time, KEEPTTL 은 없는 키에도 OK")
+    void setExpiryOverflowAndKeepTtlOnMissingKey() {
+        // Redis 7.2.4 - 현재 시각을 더해 넘치는 값도 거부
+        assertEquals(error("ERR invalid expire time in 'set' command"),
+                run("SET", "k", "v", "PX", "9223372036854775807"));
+        assertEquals(error("ERR invalid expire time in 'set' command"),
+                run("SET", "k", "v", "EX", "9223372036854775"));
+        assertEquals(RespValue.OK, run("SET", "k", "v", "KEEPTTL"));
+        assertEquals(integer(-1), run("TTL", "k"));
+    }
+
+    @Test
+    @DisplayName("EXPIRE 계열 넘침 - 단위 변환·현재 시각 덧셈에서 넘치면 에러, PEXPIREAT 최댓값은 허용")
+    void expireFamilyOverflow() {
+        run("SET", "k", "v");
+
+        assertEquals(error("ERR invalid expire time in 'expire' command"),
+                run("EXPIRE", "k", "9223372036854775807"));
+        assertEquals(error("ERR invalid expire time in 'expire' command"),
+                run("EXPIRE", "k", "9223372036854775"));
+        assertEquals(error("ERR invalid expire time in 'pexpire' command"),
+                run("PEXPIRE", "k", "9223372036854775807"));
+        assertEquals(error("ERR invalid expire time in 'expireat' command"),
+                run("EXPIREAT", "k", "9223372036854775807"));
+        assertEquals(integer(-1), run("TTL", "k"));
+        assertEquals(integer(1), run("PEXPIREAT", "k", "9223372036854775807"));
+        assertEquals(integer(Long.MAX_VALUE - tester.clock.millis()), run("PTTL", "k"));
+    }
+
+    private static byte[] bytes(String text) {
+        return text.getBytes(StandardCharsets.UTF_8);
     }
 
     private RespValue run(String... argv) {

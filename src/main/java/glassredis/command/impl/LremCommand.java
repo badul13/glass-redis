@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ListValue;
 
@@ -35,9 +35,6 @@ public final class LremCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 3) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         OptionalLong parsed = Numbers.parseLong(args.get(1));
         if (parsed.isEmpty()) {
             return Errors.notAnInteger();
@@ -46,13 +43,11 @@ public final class LremCommand implements Command {
         byte[] target = args.get(2);
 
         Key key = new Key(args.get(0));
-        Entry entry = ctx.keyspace().get(key);
-        if (entry == null) {
-            return new RespValue.Int(0);
+        Lookup<ListValue> found = Lookup.listWrite(ctx, key, new RespValue.Int(0));
+        if (found.reply() != null) {
+            return found.reply();
         }
-        if (!(entry.value() instanceof ListValue list)) {
-            return Errors.wrongType();
-        }
+        ListValue list = found.value();
 
         // Long.MIN_VALUE - 부호 반전 불가라 제한 없음 취급, 결과 동일
         long limit = count == 0 || count == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(count);
@@ -60,7 +55,7 @@ public final class LremCommand implements Command {
         ctx.dirty(removed);
 
         if (list.length() == 0) {
-            ctx.keyspace().remove(key);
+            ctx.keyspace().delete(key);
         } else if (removed > 0) {
             list.afterShrink();
         }

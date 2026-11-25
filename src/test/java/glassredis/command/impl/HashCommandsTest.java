@@ -116,6 +116,17 @@ class HashCommandsTest {
                 run("HMGET", "s", "a"));
     }
 
+    @Test
+    @DisplayName("HINCRBY - 64바이트 넘는 필드면 hashtable 로 전환")
+    void hincrbyLongFieldConvertsToHashtable() {
+        // 기대값 - Redis 7.2.4 hashTypeSet 의 hash-max-listpack-value 검사
+        run("HINCRBY", "h", "f".repeat(64), "1");
+        assertEquals(bulk("listpack"), run("OBJECT", "ENCODING", "h"));
+
+        assertEquals(integer(1), run("HINCRBY", "h", "f".repeat(65), "1"));
+        assertEquals(bulk("hashtable"), run("OBJECT", "ENCODING", "h"));
+    }
+
     private RespValue run(String... argv) {
         return tester.run(argv);
     }

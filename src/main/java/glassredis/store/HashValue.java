@@ -34,12 +34,16 @@ public final class HashValue implements Value {
         return hash;
     }
 
-    /** RDB 필드 나열 형식 - 개수가 한도 넘으면 처음부터 hashtable */
+    /**
+     * RDB 필드 나열 형식 - 개수가 한도 넘으면 처음부터 hashtable
+     *
+     * @throws Dict.ExpandFailedException 미리 확장 실패 (dictTryExpand) - 로더가 손상으로 처리
+     */
     public static HashValue forLoading(long length) {
         HashValue hash = new HashValue();
         if (length > MAX_LISTPACK_ENTRIES) {
             hash.convertToDict();
-            hash.dict.expand(length);
+            tryExpandForLoading(hash.dict, length);
         }
         return hash;
     }
@@ -49,6 +53,7 @@ public final class HashValue implements Value {
      * listpack 단계는 중복 확인 없음 - sanitize-dump-payload no 와 동일
      *
      * @param remaining 이 필드 뒤에 남은 필드 수 - 전환 시 hashtable 크기
+     * @throws Dict.ExpandFailedException 전환 뒤 미리 확장 실패
      */
     public boolean putLoaded(byte[] field, byte[] value, long remaining) {
         if (dict == null) {
@@ -61,7 +66,7 @@ public final class HashValue implements Value {
             convertToDict();
             boolean added = dict.add(new Key(field), value);
             if (remaining > Dict.INITIAL_SIZE) {
-                dict.expand(remaining);
+                tryExpandForLoading(dict, remaining);
             }
             return added;
         }
@@ -177,6 +182,12 @@ public final class HashValue implements Value {
     private int findField(Key field) {
         int first = listpack.first();
         return first == -1 ? -1 : listpack.find(first, field.bytes(), 1);
+    }
+
+    private static void tryExpandForLoading(Dict<byte[]> dict, long size) {
+        if (!dict.tryExpand(size)) {
+            throw new Dict.ExpandFailedException(size);
+        }
     }
 
     private void convertToDict() {

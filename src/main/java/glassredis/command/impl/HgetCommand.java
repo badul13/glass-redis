@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.HashValue;
 import glassredis.store.Key;
 
@@ -45,17 +44,12 @@ public final class HgetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (multiple ? args.size() < 2 : args.size() != 2) {
-            return Errors.wrongNumberOfArguments(name);
+        // 없는 키는 빈 Hash 취급 - 필드마다 nil
+        Lookup<HashValue> found = Lookup.hash(ctx, new Key(args.get(0)), null);
+        if (found.reply() != null) {
+            return found.reply();
         }
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        HashValue hash = null;
-        if (entry != null) {
-            if (!(entry.value() instanceof HashValue existing)) {
-                return Errors.wrongType();
-            }
-            hash = existing;
-        }
+        HashValue hash = found.value();
 
         if (!multiple) {
             return lookup(hash, args.get(1));

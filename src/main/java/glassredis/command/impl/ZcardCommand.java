@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.SortedSetValue;
 
@@ -25,16 +24,11 @@ public final class ZcardCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
-            return Errors.wrongNumberOfArguments(name());
+        Lookup<SortedSetValue> found = Lookup.zset(ctx, new Key(args.get(0)), new RespValue.Int(0));
+        if (found.reply() != null) {
+            return found.reply();
         }
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return new RespValue.Int(0);
-        }
-        if (!(entry.value() instanceof SortedSetValue zset)) {
-            return Errors.wrongType();
-        }
+        SortedSetValue zset = found.value();
         return new RespValue.Int(zset.size());
     }
 }

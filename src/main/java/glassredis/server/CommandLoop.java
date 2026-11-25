@@ -19,6 +19,7 @@ import glassredis.replication.Replicator;
 import glassredis.resp.RespValue;
 import glassredis.store.ActiveExpireCycle;
 import glassredis.store.Keyspace;
+import glassredis.store.encoding.Dict;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -50,11 +51,8 @@ import java.util.function.Function;
  */
 final class CommandLoop implements AutoCloseable {
 
-    /** Redis hz 기본값 */
-    private static final int HZ = ActiveExpireCycle.HZ;
-
-    private static final byte[] MULTI = "MULTI".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] EXEC = "EXEC".getBytes(StandardCharsets.US_ASCII);
+    /** server.hz - CONFIG_DEFAULT_HZ, 주기 작업 박자·SLOW 만료 시간 한도 */
+    static final int HZ = 10;
 
     /** 무제한 큐 - 커넥션당 명령 묶음 1개 + 주기 작업 1개라 최대 커넥션 수 + 1 */
     private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
@@ -152,7 +150,10 @@ final class CommandLoop implements AutoCloseable {
                 propagate(List.of(del));
             }
         });
-        this.activeExpire = new ActiveExpireCycle(keyspace, events);
+        this.activeExpire = new ActiveExpireCycle(keyspace, events, HZ);
+        // lookupKey 의 lru 갱신 생략 판단 (hasActiveChildProcess), 쓰기 조회의 만료 키 강제 삭제 판단 (repl_slave_ro)
+        keyspace.setChildActiveCheck(persistence::childActive);
+        keyspace.setReplicaReadOnly(replication.replicaReadOnly());
         this.onFatalError = onFatalError;
     }
 
@@ -190,6 +191,8 @@ final class CommandLoop implements AutoCloseable {
         @Override
         public void beginUnit() {
             unit = new ArrayList<>();
+            // 실행 단위 시작 - EXEC 안의 명령들은 같은 시각 (enterExecutionUnit 중첩)
+            context.keyspace().updateCommandTime();
         }
 
         @Override
@@ -404,11 +407,16 @@ final class CommandLoop implements AutoCloseable {
      */
     private void serverCron() {
         Keyspace keyspace = context.keyspace();
+        // server.lruclock = getLRUClock() - databasesCron 보다 먼저
+        keyspace.updateLruClock();
         if (!master.isReplica()) {
             activeExpire.run(ActiveExpireCycle.Kind.SLOW);
         }
-        keyspace.tryResizeHashTables();
-        keyspace.incrementallyRehash();
+        // databasesCron - 자식 작업 중엔 축소·rehash 생략 (copy-on-write 회피)
+        if (!persistence.childActive()) {
+            keyspace.tryResizeHashTables();
+            keyspace.incrementallyRehash();
+        }
         persistence.cron();
         // fsync 가 늦어 미룬 AOF 쓰기 재시도
         aof.cronFlush();
@@ -439,13 +447,22 @@ final class CommandLoop implements AutoCloseable {
     }
 
     private void runLoop() {
+        updateDictResizePolicy();
         while (running) {
             try {
                 // 큐가 비면 곧 대기 - beforeSleep
-                if (queue.isEmpty()) {
+                boolean slept = queue.isEmpty();
+                if (slept) {
                     beforeSleep();
                 }
-                queue.take().run();
+                Runnable task = queue.take();
+                if (slept) {
+                    // afterSleep - 명령 밖에서 쓸 시각 스냅샷 갱신
+                    context.keyspace().updateCommandTime();
+                }
+                task.run();
+                // 작업 안에서 자식 작업이 시작·종료됐을 수 있음
+                updateDictResizePolicy();
             } catch (InterruptedException e) {
                 return; // close()
             } catch (Throwable fatal) {
@@ -468,16 +485,7 @@ final class CommandLoop implements AutoCloseable {
         if (commands.isEmpty() || (!aof.enabled() && !master.propagating())) {
             return;
         }
-        boolean transaction = commands.size() > 1;
-        if (transaction) {
-            propagateNow(-1, List.of(MULTI));
-        }
-        for (List<byte[]> argv : commands) {
-            propagateNow(0, argv);
-        }
-        if (transaction) {
-            propagateNow(-1, List.of(EXEC));
-        }
+        Propagation.emit(commands, this::propagateNow);
     }
 
     /** propagateNow - AOF 버퍼와 복제 스트림에 같이 */
@@ -495,20 +503,19 @@ final class CommandLoop implements AutoCloseable {
         List<byte[]> args = argv.subList(1, argv.size());
 
         // processCommand 순서 - 인자 수 검사 → 저장 실패 중이면 쓰기 명령·PING 거부
-        int arity = command.arity();
-        RespValue reply;
-        if ((arity > 0 && argv.size() != arity) || argv.size() < -arity) {
-            reply = Errors.wrongNumberOfArguments(command.name());
-        } else if (client.isMaster()) {
-            // 마스터가 보낸 건 따름 (mustObeyClient) - MISCONF·READONLY 없음
-            reply = null;
-        } else {
+        // 마스터가 보낸 건 따름 (mustObeyClient) - MISCONF·READONLY 없음
+        RespValue reply = Command.checkArity(command, argv.size());
+        if (reply == null && !client.isMaster()) {
             reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
             if (reply == null && command.writes() && master.deniesWrite(client)) {
                 reply = READONLY;
             }
         }
         if (reply == null) {
+            // call() 의 enterExecutionUnit - 명령 하나 동안 만료 판정 시각 고정 (EXEC 안이면 단위 시작 시각 그대로)
+            if (unit == null) {
+                context.keyspace().updateCommandTime();
+            }
             context.propagation().begin(argv);
             try {
                 reply = command.execute(context, args);
@@ -517,6 +524,8 @@ final class CommandLoop implements AutoCloseable {
                 log("명령 %s 처리 중 예외: %s", command.name(), e);
                 reply = Errors.internal(e.getClass().getSimpleName());
             }
+            // BGSAVE·BGREWRITEAOF 로 자식 작업이 시작됐을 수 있음 - 다음 명령부터 반영
+            updateDictResizePolicy();
             // 예외로 끝나도 이미 바꾼 만큼은 기록
             persistence.afterCommand(context.propagation().dirtyCount());
             if (unit != null) {
@@ -531,6 +540,14 @@ final class CommandLoop implements AutoCloseable {
             events.publish(Event.command(connectionId, command.name(), args, System.nanoTime() - startNanos, reply));
         }
         return reply;
+    }
+
+    /**
+     * updateDictResizePolicy - 자식 작업(BGSAVE·AOF 재작성·디스크리스 전송) 중이면 AVOID
+     * Redis 는 fork 시작·종료 때 호출, 여기선 실행 스레드가 작업·명령마다 확인
+     */
+    private void updateDictResizePolicy() {
+        Dict.setResizePolicy(persistence.childActive() ? Dict.ResizePolicy.AVOID : Dict.ResizePolicy.ENABLE);
     }
 
     private static void log(String format, Object... args) {

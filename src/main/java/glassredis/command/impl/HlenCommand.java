@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.HashValue;
 import glassredis.store.Key;
 
@@ -25,16 +24,11 @@ public final class HlenCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
-            return Errors.wrongNumberOfArguments(name());
+        Lookup<HashValue> found = Lookup.hash(ctx, new Key(args.get(0)), new RespValue.Int(0));
+        if (found.reply() != null) {
+            return found.reply();
         }
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return new RespValue.Int(0);
-        }
-        if (!(entry.value() instanceof HashValue hash)) {
-            return Errors.wrongType();
-        }
+        HashValue hash = found.value();
         return new RespValue.Int(hash.size());
     }
 }

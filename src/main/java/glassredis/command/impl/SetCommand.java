@@ -4,16 +4,15 @@ import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.command.Numbers;
+import glassredis.command.Options;
 import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 import glassredis.store.StringValue;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.OptionalLong;
 
 /**
@@ -56,10 +55,6 @@ public final class SetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() < 2) {
-            return Errors.wrongNumberOfArguments(name());
-        }
-
         // 옵션 조합만 확인
         boolean nx = false;
         boolean xx = false;
@@ -69,39 +64,21 @@ public final class SetCommand implements Command {
         byte[] expiryArgument = null;
 
         for (int i = 2; i < args.size(); i++) {
-            String option = new String(args.get(i), StandardCharsets.US_ASCII).toUpperCase(Locale.ROOT);
-            boolean hasValue = i + 1 < args.size();
-            switch (option) {
-                case "NX" -> {
-                    if (xx) {
-                        return Errors.syntaxError();
-                    }
-                    nx = true;
-                }
-                case "XX" -> {
-                    if (nx) {
-                        return Errors.syntaxError();
-                    }
-                    xx = true;
-                }
-                case "GET" -> get = true;
-                case "KEEPTTL" -> {
-                    if (expiry != null) {
-                        return Errors.syntaxError();
-                    }
-                    keepTtl = true;
-                }
-                case "EX", "PX", "EXAT", "PXAT" -> {
-                    ExpiryOption kind = ExpiryOption.valueOf(option);
-                    if (keepTtl || (expiry != null && expiry != kind) || !hasValue) {
-                        return Errors.syntaxError();
-                    }
-                    expiry = kind;
-                    expiryArgument = args.get(++i);
-                }
-                default -> {
-                    return Errors.syntaxError();
-                }
+            byte[] option = args.get(i);
+            ExpiryOption kind = expiryOption(option);
+            if (Options.is(option, "NX") && !xx) {
+                nx = true;
+            } else if (Options.is(option, "XX") && !nx) {
+                xx = true;
+            } else if (Options.is(option, "GET")) {
+                get = true;
+            } else if (Options.is(option, "KEEPTTL") && expiry == null) {
+                keepTtl = true;
+            } else if (kind != null && !keepTtl && (expiry == null || expiry == kind) && i + 1 < args.size()) {
+                expiry = kind;
+                expiryArgument = args.get(++i);
+            } else {
+                return Errors.syntaxError();
             }
         }
 
@@ -125,26 +102,32 @@ public final class SetCommand implements Command {
         }
 
         Key key = new Key(args.get(0));
-        Entry previous = keyspace.get(key);
         RespValue previousValue = RespValue.NIL;
-        if (previous != null && get) {
-            // GET 없으면 자료형 무관 덮어쓰기
-            if (!(previous.value() instanceof StringValue string)) {
-                return Errors.wrongType();
+        if (get) {
+            // getGenericCommand - lookupKeyRead, GET 없으면 자료형 무관 덮어쓰기
+            Entry previous = keyspace.get(key);
+            if (previous != null) {
+                if (!(previous.value() instanceof StringValue string)) {
+                    return Errors.wrongType();
+                }
+                previousValue = new RespValue.BulkString(string.bytes());
             }
-            previousValue = new RespValue.BulkString(string.bytes());
         }
 
-        if ((nx && previous != null) || (xx && previous == null)) {
+        boolean found = keyspace.getWrite(key) != null;
+        if ((nx && found) || (xx && !found)) {
             return get ? previousValue : RespValue.NIL;
         }
 
-        if (keepTtl && previous != null) {
-            expireAt = previous.expireAtMillis();
-        }
-        // 지난 EXAT/PXAT도 저장 - 다음 조회 시 만료
-        keyspace.put(key, new Entry(StringValue.of(args.get(1)), expireAt));
+        // setGenericCommand - 만료 옵션이 있으면 지우지 않고 뒤에서 덮어씀 (SETKEY_KEEPTTL)
+        int flags = (keepTtl || expiry != null ? Keyspace.SETKEY_KEEPTTL : 0)
+                | (found ? Keyspace.SETKEY_ALREADY_EXIST : Keyspace.SETKEY_DOESNT_EXIST);
+        keyspace.setKey(key, StringValue.of(args.get(1)), flags);
         ctx.dirty();
+        if (expiry != null) {
+            // 지난 EXAT/PXAT도 저장 - 다음 조회 시 만료
+            keyspace.setExpire(key, expireAt);
+        }
         if (expiry != null && expiry != ExpiryOption.PXAT) {
             // 상대 시간은 재시작 후 밀리므로 절대 시각으로 - 다른 옵션은 버림
             ctx.propagateAs("SET", args.get(0), args.get(1), "PXAT", expireAt);
@@ -154,11 +137,21 @@ public final class SetCommand implements Command {
         return get ? previousValue : RespValue.OK;
     }
 
-    /** 값 뒤의 GET 전부 제거 - 이름·키·값 자리는 그대로 */
+    /** EX/PX/EXAT/PXAT 중 하나면 그 종류, 아니면 null */
+    private static ExpiryOption expiryOption(byte[] option) {
+        for (ExpiryOption kind : ExpiryOption.values()) {
+            if (Options.is(option, kind.name())) {
+                return kind;
+            }
+        }
+        return null;
+    }
+
+    /** 값 뒤의 GET 전부 제거 - 이름·키·값 자리는 그대로, 비교는 옵션 해석과 같은 C 문자열 방식 */
     private static List<byte[]> withoutGet(List<byte[]> argv) {
         List<byte[]> kept = new ArrayList<>(argv.size());
         for (int i = 0; i < argv.size(); i++) {
-            if (i >= 3 && "GET".equalsIgnoreCase(new String(argv.get(i), StandardCharsets.US_ASCII))) {
+            if (i >= 3 && Options.is(argv.get(i), "GET")) {
                 continue;
             }
             kept.add(argv.get(i));

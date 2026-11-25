@@ -27,12 +27,8 @@ public final class Context {
         this.replication = replication;
     }
 
-    public Context(Keyspace keyspace, Propagation propagation, ServerControl server) {
-        this(keyspace, propagation, server, Replication.NONE);
-    }
-
     public Context(Keyspace keyspace) {
-        this(keyspace, new Propagation(), ServerControl.NONE);
+        this(keyspace, new Propagation(), ServerControl.NONE, Replication.NONE);
     }
 
     public Keyspace keyspace() {

@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.SetValue;
 
@@ -63,21 +62,14 @@ public final class SetAlgebraCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (singleKey ? args.size() != 1 : args.isEmpty()) {
-            return Errors.wrongNumberOfArguments(name);
-        }
-
         // 없는 키는 null, 같은 키 반복 시 같은 객체
         List<SetValue> sets = new ArrayList<>(args.size());
         for (byte[] key : args) {
-            Entry entry = ctx.keyspace().get(new Key(key));
-            if (entry == null) {
-                sets.add(null);
-            } else if (entry.value() instanceof SetValue set) {
-                sets.add(set);
-            } else {
-                return Errors.wrongType();
+            Lookup<SetValue> found = Lookup.set(ctx, new Key(key), null);
+            if (found.reply() != null) {
+                return found.reply();
             }
+            sets.add(found.value());
         }
 
         List<RespValue> items = new ArrayList<>();

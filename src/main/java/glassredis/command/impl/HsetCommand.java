@@ -3,8 +3,8 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.HashValue;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
@@ -50,21 +50,22 @@ public final class HsetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() < 3 || args.size() % 2 == 0) {
+        // 필드·값 짝 검사 - arity 로 표현 불가
+        if (args.size() % 2 == 0) {
             return Errors.wrongNumberOfArguments(name());
         }
         Keyspace keyspace = ctx.keyspace();
         Key key = new Key(args.get(0));
-        Entry entry = keyspace.get(key);
-
+        Lookup<HashValue> found = Lookup.hashWrite(ctx, key, null);
+        if (found.reply() != null) {
+            return found.reply();
+        }
         HashValue hash;
-        if (entry == null) {
+        if (found.value() == null) {
             hash = new HashValue();
-            keyspace.put(key, Entry.of(hash));
-        } else if (entry.value() instanceof HashValue existing) {
-            hash = existing;
+            keyspace.add(key, hash);
         } else {
-            return Errors.wrongType();
+            hash = found.value();
         }
 
         // 쌍 512개 초과 또는 64바이트 초과 값 존재 시 삽입 전 hashtable로 선전환

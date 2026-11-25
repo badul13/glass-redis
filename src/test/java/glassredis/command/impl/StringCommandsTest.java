@@ -4,6 +4,8 @@ import glassredis.resp.RespValue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static glassredis.command.impl.CommandTester.bulk;
 import static glassredis.command.impl.CommandTester.error;
 import static glassredis.command.impl.CommandTester.integer;
@@ -189,6 +191,66 @@ class StringCommandsTest {
 
         assertEquals(integer(6), run("STRLEN", "k"));
         assertEquals(integer(0), run("STRLEN", "missing"));
+    }
+
+    @Test
+    @DisplayName("명령 옵션은 NUL 에서 끝나는 C 문자열로 비교 - SET·EXPIRE·ZADD·ZRANGE·ZRANK·BGSAVE 공통")
+    void optionsStopAtNul() {
+        // 기대값 - Redis 7.2.4 strcasecmp 비교 결과
+        assertEquals(RespValue.OK, run("SET", "k", "v", "nx\u0000junk"));
+        assertEquals(RespValue.NIL, run("SET", "k", "v2", "nx\u0000junk"));
+        assertEquals(integer(1), run("EXPIRE", "k", "10", "nx\u0000x"));
+        assertEquals(integer(0), run("EXPIRE", "k", "20", "NX\u0000"));
+        assertEquals(integer(1), run("ZADD", "z", "ch\u0000x", "1", "a"));
+        assertEquals(integer(1), run("ZADD", "z", "CH\u0000", "2", "a"));
+        assertEquals(RespValue.Array.of(bulk("a"), bulk("2")), run("ZRANGE", "z", "0", "-1", "withscores\u0000x"));
+        assertEquals(RespValue.Array.of(bulk("a")), run("ZRANGEBYSCORE", "z", "0", "5", "limit\u0000", "0", "1"));
+        assertEquals(RespValue.Array.of(integer(0), bulk("2")), run("ZRANK", "z", "a", "withscore\u0000z"));
+
+        run("SET", "g", "v");
+        tester.propagated.clear();
+        assertEquals(bulk("v"), run("SET", "g", "v3", "GET\u0000x"));
+        assertEquals(List.of("SET g v3"), tester.propagated);
+    }
+
+    @Test
+    @DisplayName("STRLEN - int 인코딩 값도 십진 표기 길이")
+    void strlenOfIntEncoding() {
+        run("SET", "n", "12345");
+        run("INCR", "n");
+
+        assertEquals(bulk("int"), run("OBJECT", "ENCODING", "n"));
+        assertEquals(integer(5), run("STRLEN", "n"));
+        run("SET", "neg", "-9223372036854775808");
+        assertEquals(integer(20), run("STRLEN", "neg"));
+    }
+
+    @Test
+    @DisplayName("DECR - 없는 키는 0 에서 1 감소, 최솟값에서는 넘침 에러")
+    void decr() {
+        assertEquals(integer(-1), run("DECR", "missing"));
+        assertEquals(integer(-2), run("DECR", "missing"));
+
+        run("SET", "min", "-9223372036854775808");
+        assertEquals(error("ERR increment or decrement would overflow"), run("DECR", "min"));
+    }
+
+    @Test
+    @DisplayName("MGET - 문자열이 아닌 키 자리는 에러 대신 nil")
+    void mgetSkipsOtherTypes() {
+        run("SET", "s", "x");
+        run("RPUSH", "list", "a");
+
+        assertEquals(RespValue.Array.of(bulk("x"), RespValue.NIL, RespValue.NIL), run("MGET", "s", "list", "missing"));
+    }
+
+    @Test
+    @DisplayName("APPEND 한도 - 합이 proto-max-bulk-len(512MB) 초과면 거부, 마스터·AOF 로딩은 생략")
+    void appendLengthLimit() {
+        long max = 512L * 1024 * 1024;
+        assertEquals(false, AppendCommand.exceedsLimit(max - 1, 1, false), "딱 512MB 까지 허용");
+        assertEquals(true, AppendCommand.exceedsLimit(max, 1, false));
+        assertEquals(false, AppendCommand.exceedsLimit(max, 1, true), "mustObeyClient 면 검사 생략");
     }
 
     private RespValue run(String... argv) {

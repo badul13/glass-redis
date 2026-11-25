@@ -2,9 +2,7 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 
 import java.util.List;
@@ -29,15 +27,11 @@ public final class PersistCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
-            return Errors.wrongNumberOfArguments(name());
-        }
+        // persistCommand - lookupKeyWrite 후 removeExpire
         Key key = new Key(args.get(0));
-        Entry entry = ctx.keyspace().get(key);
-        if (entry == null || !entry.hasExpiry()) {
+        if (ctx.keyspace().getWrite(key) == null || !ctx.keyspace().removeExpire(key)) {
             return new RespValue.Int(0);
         }
-        ctx.keyspace().put(key, entry.withExpireAt(Entry.NO_EXPIRY));
         ctx.dirty();
         return new RespValue.Int(1);
     }

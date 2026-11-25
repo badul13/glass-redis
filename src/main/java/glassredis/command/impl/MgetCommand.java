@@ -2,7 +2,6 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 import glassredis.store.Entry;
 import glassredis.store.Key;
@@ -26,9 +25,6 @@ public final class MgetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.isEmpty()) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         List<RespValue> values = new ArrayList<>(args.size());
         for (byte[] key : args) {
             Entry entry = ctx.keyspace().get(new Key(key));

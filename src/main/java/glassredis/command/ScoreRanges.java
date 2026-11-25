@@ -2,10 +2,12 @@ package glassredis.command;
 
 import glassredis.store.ScoreRange;
 
-import java.util.Arrays;
 import java.util.OptionalDouble;
 
-/** ZRANGEBYSCORE/ZCOUNT의 min max 파싱 - 기본 포함, ( 접두 시 제외 */
+/**
+ * ZRANGEBYSCORE/ZCOUNT의 min max 파싱 - zslParseRange
+ * 기본 포함, ( 접두 시 제외, 숫자 해석은 {@link Numbers#parseRangeBound} (ZADD 의 string2d 보다 너그러움)
+ */
 public final class ScoreRanges {
 
     private ScoreRanges() {
@@ -15,8 +17,8 @@ public final class ScoreRanges {
     public static ScoreRange parse(byte[] min, byte[] max) {
         boolean minExclusive = isExclusive(min);
         boolean maxExclusive = isExclusive(max);
-        OptionalDouble minValue = Numbers.parseDouble(minExclusive ? Arrays.copyOfRange(min, 1, min.length) : min);
-        OptionalDouble maxValue = Numbers.parseDouble(maxExclusive ? Arrays.copyOfRange(max, 1, max.length) : max);
+        OptionalDouble minValue = Numbers.parseRangeBound(min, minExclusive ? 1 : 0);
+        OptionalDouble maxValue = Numbers.parseRangeBound(max, maxExclusive ? 1 : 0);
         if (minValue.isEmpty() || maxValue.isEmpty()) {
             return null;
         }

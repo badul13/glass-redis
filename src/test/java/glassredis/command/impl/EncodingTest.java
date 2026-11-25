@@ -10,7 +10,7 @@ import java.util.List;
 import static glassredis.command.impl.CommandTester.bulk;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 인코딩 전환 경계 - 기대값은 실제 Redis 7.4 의 {@code OBJECT ENCODING} 결과 */
+/** 인코딩 전환 경계 - 기대값은 실제 Redis 7.2.4 의 {@code OBJECT ENCODING} 결과 */
 class EncodingTest {
 
     private final CommandTester tester = new CommandTester();

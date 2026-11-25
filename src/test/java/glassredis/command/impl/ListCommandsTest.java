@@ -75,6 +75,42 @@ class ListCommandsTest {
     }
 
     @Test
+    @DisplayName("count 준 POP 의 없는 키는 널 배열 (*-1) - count 0 도 같음")
+    void popWithCountOnMissingKey() {
+        assertEquals(RespValue.NIL_ARRAY, run("LPOP", "missing", "2"));
+        assertEquals(RespValue.NIL_ARRAY, run("RPOP", "missing", "1"));
+        assertEquals(RespValue.NIL_ARRAY, run("LPOP", "missing", "0"));
+        assertEquals(RespValue.NIL, run("LPOP", "missing"));
+        assertEquals(error("ERR wrong number of arguments for 'lpop' command"), run("LPOP", "k", "1", "2"));
+    }
+
+    @Test
+    @DisplayName("count 0 은 조회만 하고 바로 빈 배열 - 변경·전파 없음")
+    void popZeroCountChangesNothing() {
+        run("RPUSH", "k", "a");
+        tester.propagated.clear();
+
+        assertEquals(RespValue.EMPTY_ARRAY, run("LPOP", "k", "0"));
+        assertEquals(0, tester.lastDirty);
+        assertEquals(List.of(), tester.propagated);
+
+        run("SET", "s", "v");
+        assertEquals(error("WRONGTYPE Operation against a key holding the wrong kind of value"), run("LPOP", "s", "0"));
+    }
+
+    @Test
+    @DisplayName("LINDEX 검사 순서 - 키 조회, 자료형, 인덱스 해석")
+    void lindexCheckOrder() {
+        run("SET", "s", "v");
+
+        assertEquals(RespValue.NIL, run("LINDEX", "missing", "abc"));
+        assertEquals(error("WRONGTYPE Operation against a key holding the wrong kind of value"),
+                run("LINDEX", "s", "abc"));
+        run("RPUSH", "k", "a");
+        assertEquals(error("ERR value is not an integer or out of range"), run("LINDEX", "k", "abc"));
+    }
+
+    @Test
     @DisplayName("LRANGE - 음수 인덱스는 뒤에서부터, 범위 초과는 잘라서 보정")
     void lrangeIndexes() {
         run("RPUSH", "k", "a", "b", "c", "d");

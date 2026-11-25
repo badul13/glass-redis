@@ -5,6 +5,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static glassredis.command.impl.CommandTester.array;
 import static glassredis.command.impl.CommandTester.bulk;
 import static glassredis.command.impl.CommandTester.error;
@@ -165,6 +167,104 @@ class SortedSetCommandsTest {
         assertEquals(array("bob", "alice"), run("ZREVRANGEBYSCORE", "board", "+inf", "-inf", "LIMIT", "1", "2"));
         assertEquals(error("ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"),
                 run("ZRANGE", "board", "0", "-1", "LIMIT", "1", "2"));
+    }
+
+    @Test
+    @DisplayName("LIMIT 의 큰 offset·count - 덧셈 넘침 없이 Redis 와 같은 결과")
+    void limitWithHugeOffsetOrCount() {
+        // Redis 7.2.4 - offset 이 크기 이상이면 빈 배열, count 가 크면 끝까지
+        assertEquals(RespValue.EMPTY_ARRAY,
+                run("ZRANGEBYSCORE", "board", "30", "+inf", "LIMIT", "9223372036854775807", "1"));
+        assertEquals(array("bob", "dave"),
+                run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "2", "9223372036854775807"));
+        assertEquals(array("alice", "carol"),
+                run("ZREVRANGEBYSCORE", "board", "+inf", "-inf", "LIMIT", "2", "9223372036854775807"));
+        assertEquals(RespValue.EMPTY_ARRAY,
+                run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "4", "1"));
+        assertEquals(RespValue.EMPTY_ARRAY,
+                run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "-1", "1"));
+        assertEquals(array("dave"), run("ZRANGEBYSCORE", "board", "-inf", "+inf", "LIMIT", "3", "-5"));
+    }
+
+    @Test
+    @DisplayName("순위 방식 LIMIT 거부 기준은 count 가 -1 이 아님 - offset 은 무관")
+    void limitOnRankRangeDependsOnCountOnly() {
+        assertEquals(array("carol", "alice", "bob", "dave"), run("ZRANGE", "board", "0", "-1", "LIMIT", "5", "-1"));
+        assertEquals(array("dave", "bob", "alice", "carol"), run("ZREVRANGE", "board", "0", "-1", "LIMIT", "0", "-1"));
+        assertEquals(error("ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"),
+                run("ZRANGE", "board", "0", "-1", "LIMIT", "0", "1"));
+    }
+
+    @Test
+    @DisplayName("BYSCORE·REV 두 번 지정, 이름에 이미 정해진 방식 재지정 시 syntax error")
+    void repeatedModeOptions() {
+        assertEquals(error("ERR syntax error"), run("ZRANGE", "board", "0", "-1", "BYSCORE", "BYSCORE"));
+        assertEquals(error("ERR syntax error"), run("ZRANGE", "board", "0", "-1", "REV", "REV"));
+        assertEquals(error("ERR syntax error"), run("ZRANGEBYSCORE", "board", "0", "1", "BYSCORE"));
+        assertEquals(error("ERR syntax error"), run("ZREVRANGE", "board", "0", "1", "REV"));
+    }
+
+    @Test
+    @DisplayName("ZRANK WITHSCORE - 순위와 점수 배열, 없으면 널 배열, 다른 단어는 syntax error")
+    void zrankWithScore() {
+        assertEquals(new RespValue.Array(List.of(integer(1), bulk("20"))),
+                run("ZRANK", "board", "alice", "WITHSCORE"));
+        assertEquals(new RespValue.Array(List.of(integer(2), bulk("20"))),
+                run("ZREVRANK", "board", "alice", "withscore"));
+        assertEquals(RespValue.NIL_ARRAY, run("ZRANK", "board", "nobody", "WITHSCORE"));
+        assertEquals(RespValue.NIL_ARRAY, run("ZRANK", "missing", "a", "WITHSCORE"));
+        assertEquals(RespValue.NIL, run("ZRANK", "missing", "a"));
+        assertEquals(error("ERR syntax error"), run("ZRANK", "board", "alice", "foo"));
+        assertEquals(error("ERR syntax error"), run("ZRANK", "missing", "alice", "foo"));
+        assertEquals(error("ERR wrong number of arguments for 'zrank' command"),
+                run("ZRANK", "board", "alice", "WITHSCORE", "x"));
+        run("SET", "s", "v");
+        assertEquals(error("WRONGTYPE Operation against a key holding the wrong kind of value"),
+                run("ZRANK", "s", "a", "WITHSCORE"));
+        assertEquals(error("ERR syntax error"), run("ZRANK", "s", "a", "foo"));
+    }
+
+    @Test
+    @DisplayName("ZINCRBY 는 ZADD INCR 와 같은 경로 - 증가량 자리의 옵션 단어는 syntax error")
+    void zincrbyRejectsOptionWords() {
+        assertEquals(error("ERR syntax error"), run("ZINCRBY", "k", "nx", "m"));
+        assertEquals(error("ERR syntax error"), run("ZINCRBY", "k", "INCR", "m"));
+        assertEquals(bulk("1"), run("ZINCRBY", "k", "1", "nx"));
+    }
+
+    @Test
+    @DisplayName("ZADD XX+GT - 기존 멤버를 올릴 때만, 새 멤버는 추가 안 함")
+    void zaddXxGt() {
+        assertEquals(integer(1), run("ZADD", "board", "XX", "GT", "CH", "5", "alice", "35", "bob", "1", "erin"));
+        assertEquals(bulk("20"), run("ZSCORE", "board", "alice"));
+        assertEquals(bulk("35"), run("ZSCORE", "board", "bob"));
+        assertEquals(RespValue.NIL, run("ZSCORE", "board", "erin"));
+    }
+
+    @Test
+    @DisplayName("ZADD INCR+XX 없는 키는 nil, INCR 결과 NaN 은 에러")
+    void zaddIncrEdgeCases() {
+        assertEquals(RespValue.NIL, run("ZADD", "missing", "XX", "INCR", "1", "a"));
+        assertEquals(integer(0), run("EXISTS", "missing"));
+
+        run("ZADD", "z", "+inf", "a");
+        assertEquals(error("ERR resulting score is not a number (NaN)"), run("ZADD", "z", "INCR", "-inf", "a"));
+        assertEquals(bulk("inf"), run("ZSCORE", "z", "a"));
+    }
+
+    @Test
+    @DisplayName("ZCOUNT 구간 해석은 strtod 기준 - 빈 문자열, '(' 단독, 앞 공백, 넘치는 지수 허용")
+    void zcountLenientBounds() {
+        // Redis 7.2.4 zslParseRange - eptr 끝 확인과 NaN 거부만
+        assertEquals(integer(0), run("ZCOUNT", "board", "", ""));
+        assertEquals(integer(4), run("ZCOUNT", "board", "(", "50"));
+        assertEquals(integer(4), run("ZCOUNT", "board", " 1", "50"));
+        assertEquals(integer(0), run("ZCOUNT", "board", "1e400", "+inf"));
+        assertEquals(integer(4), run("ZCOUNT", "board", "-1e400", "+inf"));
+        assertEquals(integer(1), run("ZCOUNT", "board", "0x1e", "(0x28"));
+        assertEquals(error("ERR min or max is not a float"), run("ZCOUNT", "board", "1 ", "50"));
+        assertEquals(error("ERR min or max is not a float"), run("ZCOUNT", "board", "nan", "50"));
+        assertEquals(error("ERR min or max is not a float"), run("ZRANGEBYSCORE", "board", "1\u0001", "50"));
     }
 
     @Test

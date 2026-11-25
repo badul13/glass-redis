@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 import glassredis.store.ListValue;
@@ -50,21 +49,18 @@ public final class PushCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() < 2) {
-            return Errors.wrongNumberOfArguments(name);
-        }
         Keyspace keyspace = ctx.keyspace();
         Key key = new Key(args.get(0));
-        Entry entry = keyspace.get(key);
-
+        Lookup<ListValue> found = Lookup.listWrite(ctx, key, null);
+        if (found.reply() != null) {
+            return found.reply();
+        }
         ListValue list;
-        if (entry == null) {
+        if (found.value() == null) {
             list = new ListValue();
-            keyspace.put(key, Entry.of(list));
-        } else if (entry.value() instanceof ListValue existing) {
-            list = existing;
+            keyspace.add(key, list);
         } else {
-            return Errors.wrongType();
+            list = found.value();
         }
 
         List<byte[]> values = args.subList(1, args.size());

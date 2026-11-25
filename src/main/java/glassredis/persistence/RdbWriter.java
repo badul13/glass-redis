@@ -9,6 +9,7 @@ import glassredis.store.SortedSetValue;
 import glassredis.store.StringValue;
 import glassredis.store.Value;
 import glassredis.store.encoding.Listpack;
+import glassredis.store.encoding.LongStrings;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -222,7 +223,7 @@ public final class RdbWriter {
      */
     private void rawString(byte[] s) {
         if (s.length <= 11) {
-            Long value = Listpack.toInt64(s);
+            Long value = LongStrings.parse(s);
             if (value != null && encodedInteger(value)) {
                 return;
             }

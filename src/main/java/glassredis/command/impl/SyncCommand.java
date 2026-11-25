@@ -4,6 +4,7 @@ import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.resp.RespValue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -42,7 +43,7 @@ public final class SyncCommand implements Command {
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
         List<byte[]> argv = new ArrayList<>(args.size() + 1);
-        argv.add(name.getBytes());
+        argv.add(name.getBytes(StandardCharsets.US_ASCII));
         argv.addAll(args);
         return ctx.replication().sync(ctx.client(), argv);
     }

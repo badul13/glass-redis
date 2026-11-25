@@ -7,7 +7,7 @@ package glassredis.command;
 public record IndexRange(int start, int end) {
 
     /** 절단 후 빈 구간이면 null */
-    public static IndexRange of(long start, long stop, int length) {
+    public static IndexRange of(long start, long stop, long length) {
         if (start < 0) {
             start = Math.max(start + length, 0);
         }

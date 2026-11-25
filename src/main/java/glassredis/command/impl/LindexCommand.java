@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ListValue;
 
@@ -27,20 +27,15 @@ public final class LindexCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 2) {
-            return Errors.wrongNumberOfArguments(name());
+        // lindexCommand 순서 - 키 조회·자료형 확인 뒤 인덱스 해석
+        Lookup<ListValue> found = Lookup.list(ctx, new Key(args.get(0)), RespValue.NIL);
+        if (found.reply() != null) {
+            return found.reply();
         }
+        ListValue list = found.value();
         OptionalLong parsed = Numbers.parseLong(args.get(1));
         if (parsed.isEmpty()) {
             return Errors.notAnInteger();
-        }
-
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return RespValue.NIL;
-        }
-        if (!(entry.value() instanceof ListValue list)) {
-            return Errors.wrongType();
         }
 
         byte[] element = list.index(parsed.getAsLong());

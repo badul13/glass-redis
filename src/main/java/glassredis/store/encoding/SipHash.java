@@ -23,6 +23,14 @@ public final class SipHash {
     }
 
     static long hash(byte[] in, byte[] k) {
+        return hash(in, k, 1, 2);
+    }
+
+    /**
+     * SipHash-c-d - Redis 는 c=1, d=2 (siphash.c 의 블록당 SIPROUND 1번, 마무리 2번)
+     * 라운드 수만 바꾸면 표준 SipHash-2-4 - 참조 벡터 검증용
+     */
+    static long hash(byte[] in, byte[] k, int cRounds, int dRounds) {
         long v0 = 0x736f6d6570736575L;
         long v1 = 0x646f72616e646f6dL;
         long v2 = 0x6c7967656e657261L;
@@ -41,18 +49,23 @@ public final class SipHash {
         for (int i = 0; i < end; i += 8) {
             long m = le64(in, i);
             v[3] ^= m;
-            round(v); // 블록당 1라운드
+            for (int r = 0; r < cRounds; r++) {
+                round(v);
+            }
             v[0] ^= m;
         }
         for (int i = len - 1; i >= end; i--) {
             b |= (long) (in[i] & 0xFF) << (8 * (i - end));
         }
         v[3] ^= b;
-        round(v);
+        for (int r = 0; r < cRounds; r++) {
+            round(v);
+        }
         v[0] ^= b;
         v[2] ^= 0xff;
-        round(v); // 마무리 2라운드
-        round(v);
+        for (int r = 0; r < dRounds; r++) {
+            round(v);
+        }
         return v[0] ^ v[1] ^ v[2] ^ v[3];
     }
 

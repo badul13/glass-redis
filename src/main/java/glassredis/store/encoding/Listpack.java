@@ -1,5 +1,6 @@
 package glassredis.store.encoding;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -24,9 +25,6 @@ public final class Listpack {
     public static final int HEADER_SIZE = 6;
     public static final int NUMELE_UNKNOWN = 65535;
     private static final int EOF = 0xFF;
-
-    /** long 10진수 표기 최대 길이 + 1 */
-    private static final int LONG_STR_SIZE = 21;
 
     public enum Where { BEFORE, AFTER, REPLACE }
 
@@ -205,7 +203,7 @@ public final class Listpack {
         } else if (b == 0xF4) {
             return le(p + 1, 8);
         } else {
-            throw new IllegalStateException("정수 원소가 아닙니다: 0x" + Integer.toHexString(b));
+            throw new IllegalStateException("정수 원소 아님: 0x" + Integer.toHexString(b));
         }
         // 2의 보수 - negStart 이상이면 음수
         return uval >= negStart ? -(negMax - uval) - 1 : uval;
@@ -214,31 +212,51 @@ public final class Listpack {
     /** 정수 원소는 10진수 문자열로 반환 */
     public byte[] get(int p) {
         if (isInteger(p)) {
-            return Long.toString(integer(p)).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            return Long.toString(integer(p)).getBytes(StandardCharsets.US_ASCII);
         }
-        int b = lp[p] & 0xFF;
-        int start;
-        int length;
-        if ((b & 0xC0) == 0x80) {
-            length = b & 0x3F;
-            start = p + 1;
-        } else if ((b & 0xF0) == 0xE0) {
-            length = ((b & 0x0F) << 8) | (lp[p + 1] & 0xFF);
-            start = p + 2;
-        } else {
-            length = (int) le(p + 1, 4);
-            start = p + 5;
-        }
-        return Arrays.copyOfRange(lp, start, start + length);
+        int start = stringStart(p);
+        return Arrays.copyOfRange(lp, start, start + stringLength(p));
     }
 
-    /** 정수 원소는 s를 정수로 해석해 비교 - lpCompare */
+    /**
+     * 정수 원소는 s를 정수로 해석해 비교 - lpCompare
+     * 문자열 원소는 배열 복사 없이 길이·바이트 범위 비교
+     */
     public boolean equalsAt(int p, byte[] s) {
         if (isInteger(p)) {
-            Long value = toInt64(s);
+            Long value = LongStrings.parse(s);
             return value != null && value == integer(p);
         }
-        return Arrays.equals(get(p), s);
+        int length = stringLength(p);
+        if (length != s.length) {
+            return false;
+        }
+        int start = stringStart(p);
+        return Arrays.equals(lp, start, start + length, s, 0, s.length);
+    }
+
+    /** 문자열 원소의 데이터 길이 - 6비트·12비트·32비트 길이 머리 */
+    private int stringLength(int p) {
+        int b = lp[p] & 0xFF;
+        if ((b & 0xC0) == 0x80) {
+            return b & 0x3F;
+        }
+        if ((b & 0xF0) == 0xE0) {
+            return ((b & 0x0F) << 8) | (lp[p + 1] & 0xFF);
+        }
+        return (int) le(p + 1, 4);
+    }
+
+    /** 문자열 원소의 데이터 시작 위치 */
+    private int stringStart(int p) {
+        int b = lp[p] & 0xFF;
+        if ((b & 0xC0) == 0x80) {
+            return p + 1;
+        }
+        if ((b & 0xF0) == 0xE0) {
+            return p + 2;
+        }
+        return p + 5;
     }
 
     /** 비교 사이 skip개씩 건너뜀, 없으면 -1 - Hash는 skip 1로 필드만 비교 */
@@ -309,7 +327,7 @@ public final class Listpack {
         }
         long newBytes = (long) oldBytes + encLen + backlenSize - replacedLen;
         if (newBytes > 0xFFFFFFFFL || newBytes > Integer.MAX_VALUE) {
-            throw new IllegalStateException("listpack 이 너무 커집니다");
+            throw new IllegalStateException("listpack 크기 한도(4GB) 초과");
         }
 
         byte[] grown = new byte[(int) newBytes];
@@ -390,7 +408,7 @@ public final class Listpack {
 
     /** backlen 제외 인코딩 + 데이터 - lpEncodeGetType, lpEncodeString */
     static byte[] encode(byte[] s) {
-        Long value = toInt64(s);
+        Long value = LongStrings.parse(s);
         if (value != null) {
             return encodeInteger(value);
         }
@@ -442,8 +460,8 @@ public final class Listpack {
         return out;
     }
 
-    /** backlen 포함 원소 크기 */
-    public static int entrySize(byte[] s) {
+    /** backlen 포함 원소 크기 - 헤더 총 바이트 검증용 (테스트) */
+    static int entrySize(byte[] s) {
         int encLen = encode(s).length;
         return encLen + (int) encodeBacklen(null, 0, encLen);
     }
@@ -502,7 +520,7 @@ public final class Listpack {
             shift += 7;
             p--;
             if (shift > 28) {
-                throw new IllegalStateException("backlen 이 5바이트를 넘습니다");
+                throw new IllegalStateException("backlen 5바이트 초과");
             }
         }
     }
@@ -527,60 +545,6 @@ public final class Listpack {
         long v = 0;
         for (int i = 0; i < n; i++) {
             v |= (long) (lp[at + i] & 0xFF) << (8 * i);
-        }
-        return v;
-    }
-
-    /**
-     * 되돌렸을 때 같은 바이트가 되는 표기만 정수 인정 - string2ll, 아니면 null
-     * "007", "+1", "-0", " 1"은 정수 아님
-     */
-    public static Long toInt64(byte[] s) {
-        int len = s.length;
-        if (len == 0 || len >= LONG_STR_SIZE) {
-            return null;
-        }
-        if (len == 1 && s[0] == '0') {
-            return 0L;
-        }
-        int i = 0;
-        boolean negative = false;
-        if (s[0] == '-') {
-            negative = true;
-            i++;
-            if (i == len) {
-                return null;
-            }
-        }
-        if (s[i] < '1' || s[i] > '9') {
-            return null;
-        }
-        // 2^63까지 담기 위해 부호 없는 64비트로 누적
-        long v = s[i++] - '0';
-        while (i < len && s[i] >= '0' && s[i] <= '9') {
-            if (Long.compareUnsigned(v, Long.divideUnsigned(-1L, 10)) > 0) {
-                return null;
-            }
-            v *= 10;
-            int digit = s[i] - '0';
-            if (Long.compareUnsigned(v, -1L - digit) > 0) {
-                return null;
-            }
-            v += digit;
-            i++;
-        }
-        if (i < len) {
-            return null;
-        }
-        if (negative) {
-            // -(INT64_MIN+1)+1 = 2^63
-            if (Long.compareUnsigned(v, Long.MIN_VALUE) > 0) {
-                return null;
-            }
-            return -v;
-        }
-        if (Long.compareUnsigned(v, Long.MAX_VALUE) > 0) {
-            return null;
         }
         return v;
     }

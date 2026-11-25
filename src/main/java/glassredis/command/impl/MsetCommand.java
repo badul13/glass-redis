@@ -4,8 +4,8 @@ import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
+import glassredis.store.StringValue;
 
 import java.util.List;
 
@@ -29,11 +29,13 @@ public final class MsetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.isEmpty() || args.size() % 2 != 0) {
+        // 짝 검사 - arity 로 표현 불가
+        if (args.size() % 2 != 0) {
             return Errors.wrongNumberOfArguments(name());
         }
         for (int i = 0; i < args.size(); i += 2) {
-            ctx.keyspace().put(new Key(args.get(i)), Entry.of(args.get(i + 1)));
+            // setKey(flags 0) - 키마다 lookupKeyWrite 후 추가·교체, 만료 제거
+            ctx.keyspace().setKey(new Key(args.get(i)), StringValue.of(args.get(i + 1)), 0);
         }
         ctx.dirty(args.size() / 2);
         return RespValue.OK;

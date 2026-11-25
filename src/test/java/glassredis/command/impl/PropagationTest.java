@@ -8,7 +8,7 @@ import java.util.List;
 import static glassredis.command.impl.CommandTester.integer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** AOF로 갈 명령 - 기대값은 Docker redis:7(7.4)에 같은 입력을 넣어 받은 incr 파일 */
+/** AOF로 갈 명령 - 기대값은 Docker redis:7.2.4 에 같은 입력을 넣어 받은 incr 파일 */
 class PropagationTest {
 
     private final CommandTester tester = new CommandTester();

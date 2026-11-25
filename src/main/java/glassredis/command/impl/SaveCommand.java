@@ -2,7 +2,6 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 
 import java.util.List;
@@ -25,9 +24,6 @@ public final class SaveCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (!args.isEmpty()) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         return ctx.server().save();
     }
 }

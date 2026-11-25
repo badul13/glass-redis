@@ -3,8 +3,8 @@ package glassredis.store;
 import glassredis.store.encoding.Dict;
 import glassredis.store.encoding.Intset;
 import glassredis.store.encoding.Listpack;
+import glassredis.store.encoding.LongStrings;
 
-import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 
 /**
@@ -31,7 +31,7 @@ public final class SetValue implements Value {
     /** 첫 원소와 삽입 개수 기준 인코딩 선택 - setTypeCreate */
     public static SetValue create(byte[] firstValue, long sizeHint) {
         SetValue set = new SetValue();
-        if (Listpack.toInt64(firstValue) != null && sizeHint <= MAX_INTSET_ENTRIES) {
+        if (LongStrings.parse(firstValue) != null && sizeHint <= MAX_INTSET_ENTRIES) {
             set.intset = new Intset();
         } else if (sizeHint <= MAX_LISTPACK_ENTRIES) {
             set.listpack = new Listpack();
@@ -47,7 +47,7 @@ public final class SetValue implements Value {
         SetValue set = new SetValue();
         set.intset = intset;
         if (intset.length() > MAX_INTSET_ENTRIES) {
-            set.convertToDict(intset.length());
+            set.convertToDict(intset.length(), false);
         }
         return set;
     }
@@ -60,17 +60,23 @@ public final class SetValue implements Value {
         SetValue set = new SetValue();
         set.listpack = listpack;
         if (listpack.length() > MAX_LISTPACK_ENTRIES) {
-            set.convertToDict(listpack.length());
+            set.convertToDict(listpack.length(), false);
         }
         return set;
     }
 
-    /** RDB 원소 나열 형식 - 개수가 intset 한도 넘으면 처음부터 hashtable */
+    /**
+     * RDB 원소 나열 형식 - 개수가 intset 한도 넘으면 처음부터 hashtable
+     *
+     * @throws Dict.ExpandFailedException 미리 확장 실패 (dictTryExpand) - 로더가 손상으로 처리
+     */
     public static SetValue forLoading(long length) {
         SetValue set = new SetValue();
         if (length > MAX_INTSET_ENTRIES) {
             set.dict = new Dict<>();
-            set.dict.expand(length);
+            if (length > Dict.INITIAL_SIZE && !set.dict.tryExpand(length)) {
+                throw new Dict.ExpandFailedException(length);
+            }
         } else {
             set.intset = new Intset();
         }
@@ -83,22 +89,18 @@ public final class SetValue implements Value {
      *
      * @param length           전체 원소 수
      * @param maxElementLength 지금까지 읽은 원소 중 최대 길이 - 이 원소 포함
+     * @throws Dict.ExpandFailedException hashtable 전환 시 미리 확장 실패 (setTypeConvertAndExpand panic 0)
      */
     public boolean addLoaded(byte[] value, long length, int maxElementLength) {
         if (intset != null) {
-            Long number = Listpack.toInt64(value);
+            Long number = LongStrings.parse(value);
             if (number != null) {
                 return intset.add(number);
             }
             if (intset.length() < MAX_LISTPACK_ENTRIES && maxElementLength <= MAX_LISTPACK_VALUE) {
-                Listpack converted = new Listpack();
-                for (int i = 0; i < intset.length(); i++) {
-                    converted.append(Long.toString(intset.get(i)).getBytes(StandardCharsets.US_ASCII));
-                }
-                listpack = converted;
-                intset = null;
+                convertToListpack();
             } else {
-                convertToDict(length);
+                convertToDict(length, true);
             }
         }
         if (listpack != null) {
@@ -110,7 +112,7 @@ public final class SetValue implements Value {
                 listpack.append(value);
                 return true;
             }
-            convertToDict(length);
+            convertToDict(length, true);
         }
         return dict.add(new Key(value), Boolean.TRUE);
     }
@@ -144,7 +146,7 @@ public final class SetValue implements Value {
     public void prepareForAdd(long sizeHint) {
         if ((listpack != null && sizeHint > MAX_LISTPACK_ENTRIES)
                 || (intset != null && sizeHint > MAX_INTSET_ENTRIES)) {
-            convertToDict(sizeHint);
+            convertToDict(sizeHint, false);
         }
     }
 
@@ -161,19 +163,19 @@ public final class SetValue implements Value {
             if (listpack.length() < MAX_LISTPACK_ENTRIES && value.length <= MAX_LISTPACK_VALUE) {
                 listpack.append(value);
             } else {
-                convertToDict(listpack.length() + 1L);
+                convertToDict(listpack.length() + 1L, false);
                 dict.add(new Key(value), Boolean.TRUE);
             }
             return true;
         }
 
-        Long number = Listpack.toInt64(value);
+        Long number = LongStrings.parse(value);
         if (number != null) {
             if (!intset.add(number)) {
                 return false;
             }
             if (intset.length() > MAX_INTSET_ENTRIES) {
-                convertToDict(intset.length());
+                convertToDict(intset.length(), false);
             }
             return true;
         }
@@ -185,15 +187,10 @@ public final class SetValue implements Value {
             maxElementLength = Math.max(digits(intset.max()), digits(intset.min()));
         }
         if (n < MAX_LISTPACK_ENTRIES && value.length <= MAX_LISTPACK_VALUE && maxElementLength <= MAX_LISTPACK_VALUE) {
-            Listpack converted = new Listpack();
-            for (int i = 0; i < n; i++) {
-                converted.append(Long.toString(intset.get(i)).getBytes(StandardCharsets.US_ASCII));
-            }
-            converted.append(value);
-            listpack = converted;
-            intset = null;
+            convertToListpack();
+            listpack.append(value);
         } else {
-            convertToDict(n + 1L);
+            convertToDict(n + 1L, false);
             dict.add(new Key(value), Boolean.TRUE);
         }
         return true;
@@ -216,7 +213,7 @@ public final class SetValue implements Value {
             listpack.delete(p);
             return true;
         }
-        Long number = Listpack.toInt64(value);
+        Long number = LongStrings.parse(value);
         return number != null && intset.remove(number);
     }
 
@@ -228,7 +225,7 @@ public final class SetValue implements Value {
             int first = listpack.first();
             return first != -1 && listpack.find(first, value, 0) != -1;
         }
-        Long number = Listpack.toInt64(value);
+        Long number = LongStrings.parse(value);
         return number != null && intset.contains(number);
     }
 
@@ -241,7 +238,7 @@ public final class SetValue implements Value {
             }
         } else {
             for (int i = 0; i < intset.length(); i++) {
-                visitor.accept(Long.toString(intset.get(i)).getBytes(StandardCharsets.US_ASCII));
+                visitor.accept(LongStrings.toBytes(intset.get(i)));
             }
         }
     }
@@ -258,9 +255,30 @@ public final class SetValue implements Value {
         return dict;
     }
 
-    private void convertToDict(long sizeHint) {
+    /** intset 의 정수를 10진 문자열 원소로 - setTypeConvert(OBJ_ENCODING_LISTPACK) */
+    private void convertToListpack() {
+        Listpack converted = new Listpack();
+        for (int i = 0; i < intset.length(); i++) {
+            converted.append(LongStrings.toBytes(intset.get(i)));
+        }
+        listpack = converted;
+        intset = null;
+    }
+
+    /**
+     * hashtable 로 전환 - setTypeConvertAndExpand
+     *
+     * @param loading RDB 로드 중 - 미리 확장 실패 시 예외 (panic 0, dictTryExpand), 아니면 dictExpand
+     */
+    private void convertToDict(long sizeHint, boolean loading) {
         Dict<Boolean> converted = new Dict<>();
-        converted.expand(sizeHint);
+        if (loading) {
+            if (!converted.tryExpand(sizeHint)) {
+                throw new Dict.ExpandFailedException(sizeHint);
+            }
+        } else {
+            converted.expand(sizeHint);
+        }
         forEach(member -> converted.add(new Key(member), Boolean.TRUE));
         dict = converted;
         intset = null;

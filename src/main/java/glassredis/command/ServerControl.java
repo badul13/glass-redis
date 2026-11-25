@@ -9,17 +9,17 @@ public interface ServerControl {
     ServerControl NONE = new ServerControl() {
         @Override
         public RespValue bgrewriteaof() {
-            return new RespValue.Err("ERR persistence is not available");
+            return Errors.notAvailable("persistence");
         }
 
         @Override
         public RespValue save() {
-            return new RespValue.Err("ERR");
+            return Errors.bare();
         }
 
         @Override
         public RespValue bgsave(boolean schedule) {
-            return new RespValue.Err("ERR");
+            return Errors.bare();
         }
 
         @Override

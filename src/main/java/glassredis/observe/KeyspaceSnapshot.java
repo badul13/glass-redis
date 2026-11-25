@@ -34,7 +34,7 @@ public record KeyspaceSnapshot(int totalKeys, int expiringKeys, List<KeyView> ke
 
     /** 실행 스레드 전용 */
     public static KeyspaceSnapshot of(Keyspace keyspace, int maxKeys) {
-        long now = keyspace.now();
+        long now = keyspace.clockMillis();
         List<KeyView> keys = new ArrayList<>();
         keyspace.forEach((key, entry) -> {
             if (keys.size() < maxKeys) {

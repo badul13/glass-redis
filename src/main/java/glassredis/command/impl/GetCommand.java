@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.StringValue;
 
@@ -25,16 +24,11 @@ public final class GetCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
-            return Errors.wrongNumberOfArguments(name());
+        Lookup<StringValue> found = Lookup.string(ctx, new Key(args.get(0)), RespValue.NIL);
+        if (found.reply() != null) {
+            return found.reply();
         }
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return RespValue.NIL;
-        }
-        if (!(entry.value() instanceof StringValue string)) {
-            return Errors.wrongType();
-        }
+        StringValue string = found.value();
         return new RespValue.BulkString(string.bytes());
     }
 }

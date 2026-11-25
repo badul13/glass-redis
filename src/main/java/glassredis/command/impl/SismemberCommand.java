@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.SetValue;
 
@@ -25,16 +24,11 @@ public final class SismemberCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 2) {
-            return Errors.wrongNumberOfArguments(name());
+        Lookup<SetValue> found = Lookup.set(ctx, new Key(args.get(0)), new RespValue.Int(0));
+        if (found.reply() != null) {
+            return found.reply();
         }
-        Entry entry = ctx.keyspace().get(new Key(args.get(0)));
-        if (entry == null) {
-            return new RespValue.Int(0);
-        }
-        if (!(entry.value() instanceof SetValue set)) {
-            return Errors.wrongType();
-        }
+        SetValue set = found.value();
         return new RespValue.Int(set.contains(args.get(1)) ? 1 : 0);
     }
 }

@@ -28,4 +28,19 @@ public interface Command {
     default boolean closesConnection() {
         return false;
     }
+
+    /**
+     * commandCheckArity - 인자 수 검사의 유일한 구현, CommandLoop·테스트 도구 공용
+     * 명령 안에는 arity 로 못 나타내는 검사만 (PING 최대 개수, MSET·HSET 짝 등)
+     *
+     * @param argc 이름 포함 인자 수
+     * @return 맞으면 null, 틀리면 에러 응답
+     */
+    static RespValue.Err checkArity(Command command, int argc) {
+        int arity = command.arity();
+        if ((arity > 0 && argc != arity) || argc < -arity) {
+            return Errors.wrongNumberOfArguments(command.name());
+        }
+        return null;
+    }
 }

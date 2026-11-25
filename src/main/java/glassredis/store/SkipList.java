@@ -183,7 +183,7 @@ public final class SkipList {
         }
         x = x.forward[0];
         if (x == null || !isAt(x, currentScore, member)) {
-            throw new IllegalStateException("점수를 바꿀 노드가 없습니다");
+            throw new IllegalStateException("점수를 바꿀 노드 없음");
         }
         // 이웃과 동점이면 멤버 순서까지 비교 필요 → 엄격 비교로 재삽입
         if ((x.backward == null || x.backward.score < newScore)

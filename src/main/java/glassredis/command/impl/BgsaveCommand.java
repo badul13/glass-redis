@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Options;
 import glassredis.resp.RespValue;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -28,7 +28,7 @@ public final class BgsaveCommand implements Command {
     public RespValue execute(Context ctx, List<byte[]> args) {
         boolean schedule = false;
         if (!args.isEmpty()) {
-            if (args.size() == 1 && new String(args.get(0), StandardCharsets.UTF_8).equalsIgnoreCase("SCHEDULE")) {
+            if (args.size() == 1 && Options.is(args.get(0), "SCHEDULE")) {
                 schedule = true;
             } else {
                 return Errors.syntaxError();

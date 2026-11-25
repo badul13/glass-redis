@@ -3,10 +3,10 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.IndexRange;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ListValue;
 
@@ -33,9 +33,6 @@ public final class LtrimCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 3) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         OptionalLong start = Numbers.parseLong(args.get(1));
         OptionalLong stop = Numbers.parseLong(args.get(2));
         if (start.isEmpty() || stop.isEmpty()) {
@@ -43,18 +40,16 @@ public final class LtrimCommand implements Command {
         }
 
         Key key = new Key(args.get(0));
-        Entry entry = ctx.keyspace().get(key);
-        if (entry == null) {
-            return RespValue.OK;
+        Lookup<ListValue> found = Lookup.listWrite(ctx, key, RespValue.OK);
+        if (found.reply() != null) {
+            return found.reply();
         }
-        if (!(entry.value() instanceof ListValue list)) {
-            return Errors.wrongType();
-        }
+        ListValue list = found.value();
 
-        IndexRange range = IndexRange.of(start.getAsLong(), stop.getAsLong(), list.size());
+        IndexRange range = IndexRange.of(start.getAsLong(), stop.getAsLong(), list.length());
         if (range == null) {
             ctx.dirty(list.length());
-            ctx.keyspace().remove(key);
+            ctx.keyspace().delete(key);
             return RespValue.OK;
         }
         long before = list.length();

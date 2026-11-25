@@ -2,7 +2,6 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 import glassredis.store.Key;
 
@@ -28,12 +27,13 @@ public final class DelCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.isEmpty()) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         long removed = 0;
-        for (byte[] key : args) {
-            if (ctx.keyspace().remove(new Key(key))) {
+        for (byte[] raw : args) {
+            // delGenericCommand - expireIfNeeded 뒤 dbSyncDelete
+            // 마스터는 만료 키를 먼저 지워 0, 레플리카는 만료로 안 지우므로 실제 삭제되어 1
+            Key key = new Key(raw);
+            ctx.keyspace().expireIfNeeded(key);
+            if (ctx.keyspace().delete(key)) {
                 removed++;
             }
         }

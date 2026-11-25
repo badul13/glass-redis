@@ -114,6 +114,103 @@ class SkipListTest {
         assertTrue(list.level() <= SkipList.MAX_LEVEL);
     }
 
+    @Test
+    @DisplayName("updateScore - 이웃 사이 순서가 그대로면 제자리 수정, 아니면 지우고 다시 넣기 (zslUpdateScore)")
+    void updateScoreInPlaceOrReinsert() {
+        list.insert(1, bytes("a"));
+        list.insert(2, bytes("b"));
+        list.insert(3, bytes("c"));
+        SkipList.Node b = list.byRank(2);
+
+        list.updateScore(2, bytes("b"), 2.5);
+        assertTrue(b == list.byRank(2), "같은 노드 객체 유지 - 제자리 수정");
+        assertEquals(2.5, b.score());
+
+        list.updateScore(2.5, bytes("b"), 10);
+        assertEquals(List.of("a", "c", "b"), membersForward());
+        assertEquals(List.of("b", "c", "a"), membersBackward());
+        assertEquals(3, list.rank(10, bytes("b")));
+        assertSpansConsistent();
+
+        // 이웃과 동점 - 멤버 순서까지 따져야 하므로 재삽입
+        list.updateScore(10, bytes("b"), 3);
+        assertEquals(List.of("a", "b", "c"), membersForward());
+        assertSpansConsistent();
+    }
+
+    @Test
+    @DisplayName("무작위 넣기·빼기·점수 바꾸기 후에도 순서·순위·층별 span 이 정답과 동일")
+    void matchesReferenceWithScoreUpdates() {
+        SplittableRandom random = new SplittableRandom(99);
+        TreeSet<Item> reference = new TreeSet<>(ORDER);
+        List<Item> present = new ArrayList<>();
+
+        for (int step = 0; step < 5_000; step++) {
+            int op = random.nextInt(4);
+            if (present.isEmpty() || op == 0) {
+                // 멤버는 매번 새것 - 점수 바꾸기 뒤에도 (점수, 멤버) 중복 없음
+                Item item = new Item(random.nextInt(30), bytes("m" + step));
+                reference.add(item);
+                list.insert(item.score(), item.member());
+                present.add(item);
+            } else if (op == 1) {
+                Item item = present.remove(random.nextInt(present.size()));
+                reference.remove(item);
+                assertTrue(list.delete(item.score(), item.member()));
+            } else {
+                int index = random.nextInt(present.size());
+                Item old = present.get(index);
+                // 작게 바꾸기(제자리 가능성)와 크게 바꾸기(재삽입) 섞기
+                double next = random.nextBoolean() ? old.score() + random.nextDouble() * 0.01 : random.nextInt(30);
+                Item updated = new Item(next, old.member());
+                reference.remove(old);
+                reference.add(updated);
+                present.set(index, updated);
+                list.updateScore(old.score(), old.member(), next);
+            }
+            if (step % 250 == 0) {
+                assertMatches(reference);
+                assertSpansConsistent();
+            }
+        }
+        assertMatches(reference);
+        assertSpansConsistent();
+    }
+
+    /**
+     * 층별 span 무결성 - i층 화살표는 다음으로 level > i 인 노드에 닿고 span 은 그 사이 순위 차
+     * 마지막 화살표는 -1
+     */
+    private void assertSpansConsistent() {
+        List<SkipList.Node> nodes = new ArrayList<>();
+        for (SkipList.Node node = list.first(); node != null; node = node.next()) {
+            nodes.add(node);
+        }
+        for (int i = 0; i < list.level(); i++) {
+            long rank = 0;
+            long span = list.headerSpan(i);
+            while (true) {
+                long target = -1;
+                for (int r = (int) rank; r < nodes.size(); r++) {
+                    if (nodes.get(r).level() > i) {
+                        target = r + 1;
+                        break;
+                    }
+                }
+                if (target == -1) {
+                    assertEquals(-1, span, i + "층 끝 화살표");
+                    break;
+                }
+                assertEquals(target - rank, span, i + "층 순위 " + rank + " 에서의 span");
+                rank = target;
+                span = nodes.get((int) rank - 1).span(i);
+            }
+        }
+        for (int i = list.level(); i < SkipList.MAX_LEVEL; i++) {
+            assertEquals(-1, list.headerSpan(i), "쓰지 않는 " + i + "층");
+        }
+    }
+
     private void assertMatches(TreeSet<Item> reference) {
         assertEquals(reference.size(), list.length());
         long rank = 1;

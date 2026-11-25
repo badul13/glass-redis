@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.ListValue;
 
@@ -16,7 +16,7 @@ import java.util.OptionalLong;
 /**
  * LPOP/RPOP key [count]
  * count 지정 시 1이어도 배열 응답, 비면 키 삭제
- * 없는 키 + count - 널 배열 대신 널 벌크 문자열 (Redis와 차이)
+ * 없는 키 - count 없으면 널 벌크 문자열, 있으면 널 배열 (*-1, count 0 도 같음)
  */
 public final class PopCommand implements Command {
 
@@ -53,7 +53,8 @@ public final class PopCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.isEmpty() || args.size() > 2) {
+        // 최대 개수 - arity -2 로 표현 불가
+        if (args.size() > 2) {
             return Errors.wrongNumberOfArguments(name);
         }
         boolean hasCount = args.size() == 2;
@@ -67,12 +68,14 @@ public final class PopCommand implements Command {
         }
 
         Key key = new Key(args.get(0));
-        Entry entry = ctx.keyspace().get(key);
-        if (entry == null) {
-            return RespValue.NIL;
+        Lookup<ListValue> found = Lookup.listWrite(ctx, key, hasCount ? RespValue.NIL_ARRAY : RespValue.NIL);
+        if (found.reply() != null) {
+            return found.reply();
         }
-        if (!(entry.value() instanceof ListValue list)) {
-            return Errors.wrongType();
+        ListValue list = found.value();
+        if (hasCount && count == 0) {
+            // 빠른 종료 - 변경·인코딩 확인 없음
+            return RespValue.EMPTY_ARRAY;
         }
 
         RespValue reply;
@@ -89,7 +92,7 @@ public final class PopCommand implements Command {
         }
 
         if (list.length() == 0) {
-            ctx.keyspace().remove(key);
+            ctx.keyspace().delete(key);
         } else {
             list.afterShrink();
         }

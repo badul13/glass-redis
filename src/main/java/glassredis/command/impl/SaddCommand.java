@@ -2,9 +2,8 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 import glassredis.store.SetValue;
@@ -31,23 +30,20 @@ public final class SaddCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() < 2) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         Keyspace keyspace = ctx.keyspace();
         Key key = new Key(args.get(0));
-        Entry entry = keyspace.get(key);
-
+        Lookup<SetValue> found = Lookup.setWrite(ctx, key, null);
+        if (found.reply() != null) {
+            return found.reply();
+        }
         SetValue set;
-        if (entry == null) {
+        if (found.value() == null) {
             // 첫 원소와 삽입 개수로 초기 인코딩 선택
             set = SetValue.create(args.get(1), args.size() - 1);
-            keyspace.put(key, Entry.of(set));
-        } else if (entry.value() instanceof SetValue existing) {
-            set = existing;
-            set.prepareForAdd(args.size() - 1);
+            keyspace.add(key, set);
         } else {
-            return Errors.wrongType();
+            set = found.value();
+            set.prepareForAdd(args.size() - 1);
         }
 
         long added = 0;

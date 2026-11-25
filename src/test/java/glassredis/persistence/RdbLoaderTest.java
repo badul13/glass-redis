@@ -216,6 +216,29 @@ class RdbLoaderTest {
         assertNull(value("empty"));
     }
 
+    @Test
+    @DisplayName("터무니없는 길이(30억) - dict 미리 확장 실패는 손상 처리 (rdbReportCorruptRDB \"OOM in dictTryExpand\")")
+    void hugeLengthsAreCorruption() {
+        long huge = 3_000_000_000L;
+        Crafted set = new Crafted();
+        set.entry(RdbFormat.TYPE_SET, "s").bigLength(huge);
+        assertEquals("OOM in dictTryExpand 3000000000", load(set.finish()).error());
+
+        Crafted zset = new Crafted();
+        zset.entry(RdbFormat.TYPE_ZSET_2, "z").bigLength(huge);
+        assertEquals("OOM in dictTryExpand 3000000000", load(zset.finish()).error());
+
+        Crafted hash = new Crafted();
+        hash.entry(RdbFormat.TYPE_HASH, "h").bigLength(huge);
+        assertEquals("OOM in dictTryExpand 3000000000", load(hash.finish()).error());
+
+        // RESIZEDB - Redis 는 dictExpand 할당 실패로 프로세스 중단, 여기선 같은 문구의 손상 처리
+        Crafted resize = new Crafted();
+        resize.opcode(RdbFormat.OPCODE_RESIZEDB).bigLength(huge).length(0);
+        resize.entry(RdbFormat.TYPE_STRING, "k").string("v");
+        assertEquals("OOM in dictTryExpand 3000000000", load(resize.finish()).error());
+    }
+
     // --- 값 꺼내기 ---
 
     private static String text(Value value) {
@@ -268,6 +291,18 @@ class RdbLoaderTest {
 
         Crafted length(int n) {
             out.write(n); // 6비트 길이
+            return this;
+        }
+
+        /** RDB_32BITLEN - 0x80 + 빅 엔디언 4바이트 */
+        Crafted bigLength(long n) {
+            out.write(0x80);
+            out.writeBytes(ByteBuffer.allocate(4).putInt((int) n).array());
+            return this;
+        }
+
+        Crafted opcode(int opcode) {
+            out.write(opcode);
             return this;
         }
 

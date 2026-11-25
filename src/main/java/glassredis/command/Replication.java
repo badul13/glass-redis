@@ -11,22 +11,22 @@ public interface Replication {
     Replication NONE = new Replication() {
         @Override
         public RespValue replconf(Client client, List<byte[]> args) {
-            return new RespValue.Err("ERR replication is not available");
+            return Errors.notAvailable("replication");
         }
 
         @Override
         public RespValue sync(Client client, List<byte[]> argv) {
-            return new RespValue.Err("ERR replication is not available");
+            return Errors.notAvailable("replication");
         }
 
         @Override
         public RespValue role() {
-            return new RespValue.Err("ERR replication is not available");
+            return Errors.notAvailable("replication");
         }
 
         @Override
         public RespValue replicaof(Client client, List<byte[]> args) {
-            return new RespValue.Err("ERR replication is not available");
+            return Errors.notAvailable("replication");
         }
     };
 

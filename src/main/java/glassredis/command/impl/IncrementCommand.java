@@ -3,9 +3,9 @@ package glassredis.command.impl;
 import glassredis.command.Command;
 import glassredis.command.Context;
 import glassredis.command.Errors;
+import glassredis.command.Lookup;
 import glassredis.command.Numbers;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 import glassredis.store.StringValue;
@@ -62,10 +62,6 @@ public final class IncrementCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != (takesAmount ? 2 : 1)) {
-            return Errors.wrongNumberOfArguments(name);
-        }
-
         long amount = 1;
         if (takesAmount) {
             OptionalLong parsed = Numbers.parseLong(args.get(1));
@@ -84,14 +80,14 @@ public final class IncrementCommand implements Command {
 
         Keyspace keyspace = ctx.keyspace();
         Key key = new Key(args.get(0));
-        Entry entry = keyspace.get(key);
+        Lookup<StringValue> found = Lookup.stringWrite(ctx, key, null);
+        if (found.reply() != null) {
+            return found.reply();
+        }
 
         long current = 0;
-        if (entry != null) {
-            if (!(entry.value() instanceof StringValue string)) {
-                return Errors.wrongType();
-            }
-            OptionalLong parsed = Numbers.parseLong(string.bytes());
+        if (found.value() != null) {
+            OptionalLong parsed = Numbers.parseLong(found.value().bytes());
             if (parsed.isEmpty()) {
                 return Errors.notAnInteger();
             }
@@ -105,8 +101,18 @@ public final class IncrementCommand implements Command {
             return Errors.incrementOverflow();
         }
 
+        // incrDecrCommand - 공유 아닌 int 값이 공유 범위(0~9999) 밖으로 바뀌면 같은 객체 제자리 수정 (dict 재조회 없음)
+        // 그 밖은 createStringObjectFromLongLongForValue 새 값으로 dbReplaceValue 또는 dbAdd
         StringValue text = StringValue.ofLong(updated);
-        keyspace.put(key, entry == null ? Entry.of(text) : entry.withValue(text));
+        StringValue old = found.value();
+        if (old != null && old.form() == StringValue.Form.INT && old.sharedIntegerIndex() < 0
+                && (updated < 0 || updated >= StringValue.SHARED_INTEGERS)) {
+            keyspace.replaceLookedUpValue(key, text);
+        } else if (old != null) {
+            keyspace.replaceValue(key, text);
+        } else {
+            keyspace.add(key, text);
+        }
         ctx.dirty();
         return new RespValue.Int(updated);
     }

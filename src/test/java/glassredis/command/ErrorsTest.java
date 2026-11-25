@@ -48,6 +48,19 @@ class ErrorsTest {
         assertEquals("ERR Unsupported option x y", Errors.unsupportedOption(bytes("x\ny\r\n")).message());
     }
 
+    @Test
+    @DisplayName("모르는 하위 명령 - %.128s 처럼 128 바이트까지, NUL 에서 끊김, 줄바꿈은 공백")
+    void unknownSubcommandTruncates() {
+        assertEquals("ERR unknown subcommand 'foo'. Try OBJECT HELP.",
+                Errors.unknownSubcommand(bytes("foo"), "object").message());
+        assertEquals("ERR unknown subcommand '" + "s".repeat(128) + "'. Try OBJECT HELP.",
+                Errors.unknownSubcommand(bytes("s".repeat(200)), "OBJECT").message());
+        assertEquals("ERR unknown subcommand 'ab'. Try OBJECT HELP.",
+                Errors.unknownSubcommand(bytes("ab\u0000cd"), "OBJECT").message());
+        assertEquals("ERR unknown subcommand 'a b'. Try OBJECT HELP.",
+                Errors.unknownSubcommand(bytes("a\nb"), "OBJECT").message());
+    }
+
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
     }

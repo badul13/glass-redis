@@ -34,6 +34,13 @@ class RespWriterTest {
     }
 
     @Test
+    @DisplayName("널 배열은 *-1 - 널 벌크 문자열 $-1 과 구별")
+    void nilArray() throws IOException {
+        assertWrites(RespValue.NIL_ARRAY, "*-1\r\n");
+        assertWrites(RespValue.NIL, "$-1\r\n");
+    }
+
+    @Test
     @DisplayName("벌크 문자열은 길이 먼저 출력")
     void bulkString() throws IOException {
         assertWrites(RespValue.BulkString.of("hello"), "$5\r\nhello\r\n");

@@ -1,5 +1,6 @@
 package glassredis.command;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -63,6 +64,34 @@ public final class Propagation {
     /** 받은 그대로의 이름 포함 인자 - 일부만 바꿔 전파할 때 */
     public List<byte[]> argv() {
         return argv;
+    }
+
+    /** 전파 받는 곳 - dbid -1 은 SELECT 불필요 (MULTI/EXEC) */
+    @FunctionalInterface
+    public interface Sink {
+        void feed(int dbid, List<byte[]> argv);
+    }
+
+    private static final List<byte[]> MULTI = List.of("MULTI".getBytes(StandardCharsets.US_ASCII));
+    private static final List<byte[]> EXEC = List.of("EXEC".getBytes(StandardCharsets.US_ASCII));
+
+    /**
+     * propagatePendingCommands - 둘 이상이면 MULTI/EXEC 로 감쌈
+     * 묶기 규칙의 유일한 구현 - CommandLoop·테스트 도구 공용
+     *
+     * @param commands finish() 결과
+     */
+    public static void emit(List<List<byte[]>> commands, Sink sink) {
+        boolean transaction = commands.size() > 1;
+        if (transaction) {
+            sink.feed(-1, MULTI);
+        }
+        for (List<byte[]> argv : commands) {
+            sink.feed(0, argv);
+        }
+        if (transaction) {
+            sink.feed(-1, EXEC);
+        }
     }
 
     /** 명령 실행 직후 - 전파할 명령 목록, 순서는 추가 전파 먼저 */

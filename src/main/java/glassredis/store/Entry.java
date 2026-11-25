@@ -13,7 +13,7 @@ public record Entry(Value value, long expireAtMillis) {
     public Entry {
         Objects.requireNonNull(value, "value");
         if (expireAtMillis < 0 && expireAtMillis != NO_EXPIRY) {
-            throw new IllegalArgumentException("만료 시각이 음수입니다: " + expireAtMillis);
+            throw new IllegalArgumentException("만료 시각 음수: " + expireAtMillis);
         }
     }
 
@@ -27,16 +27,6 @@ public record Entry(Value value, long expireAtMillis) {
 
     public boolean hasExpiry() {
         return expireAtMillis != NO_EXPIRY;
-    }
-
-    /** 만료 시각과 같은 ms에는 생존 - Redis와 동일하게 now > when */
-    public boolean isExpiredAt(long nowMillis) {
-        return hasExpiry() && nowMillis > expireAtMillis;
-    }
-
-    /** 만료 시각 유지 - INCR, APPEND는 만료 보존 */
-    public Entry withValue(Value newValue) {
-        return new Entry(newValue, expireAtMillis);
     }
 
     public Entry withExpireAt(long newExpireAtMillis) {

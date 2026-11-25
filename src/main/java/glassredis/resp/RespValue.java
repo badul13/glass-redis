@@ -73,10 +73,14 @@ public sealed interface RespValue {
     /** 출력 형태 - $-1\r\n */
     record Nil() implements RespValue {}
 
+    /** 출력 형태 - *-1\r\n (shared.nullarray), count 준 LPOP 의 없는 키 등 */
+    record NilArray() implements RespValue {}
+
     /** 응답 안 보냄 - REPLCONF ACK, 이미 레플리카인 연결의 SYNC */
     record NoReply() implements RespValue {}
 
     RespValue NIL = new Nil();
+    RespValue NIL_ARRAY = new NilArray();
     RespValue NO_REPLY = new NoReply();
     SimpleString OK = new SimpleString("OK");
     SimpleString PONG = new SimpleString("PONG");

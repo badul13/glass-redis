@@ -36,11 +36,10 @@ public final class SelectCommand implements Command {
             return Errors.notAnInteger();
         }
         if (index.getAsLong() < Integer.MIN_VALUE || index.getAsLong() > Integer.MAX_VALUE) {
-            return new RespValue.Err("ERR value is out of range, value must between "
-                    + Integer.MIN_VALUE + " and " + Integer.MAX_VALUE);
+            return Errors.outOfIntRange();
         }
         if (index.getAsLong() < 0 || index.getAsLong() >= DATABASES) {
-            return new RespValue.Err("ERR DB index is out of range");
+            return Errors.dbIndexOutOfRange();
         }
         return RespValue.OK;
     }

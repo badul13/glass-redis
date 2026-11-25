@@ -2,9 +2,7 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
-import glassredis.store.Entry;
 import glassredis.store.Key;
 import glassredis.store.Keyspace;
 
@@ -47,20 +45,17 @@ public final class TtlCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.size() != 1) {
-            return Errors.wrongNumberOfArguments(name);
-        }
+        // ttlGenericCommand - lookupKeyReadWithFlags(LOOKUP_NOTOUCH) 후 getExpire, 기준은 명령 시각 스냅샷
         Keyspace keyspace = ctx.keyspace();
-        // get()보다 시각 먼저 읽기 - 남은 시간 음수 방지
-        long now = keyspace.now();
-        Entry entry = keyspace.get(new Key(args.get(0)));
-        if (entry == null) {
+        Key key = new Key(args.get(0));
+        if (keyspace.getNoTouch(key) == null) {
             return new RespValue.Int(KEY_MISSING);
         }
-        if (!entry.hasExpiry()) {
+        long expire = keyspace.getExpire(key);
+        if (expire == -1) {
             return new RespValue.Int(NO_EXPIRY);
         }
-        long remainingMillis = Math.max(0, entry.expireAtMillis() - now);
+        long remainingMillis = Math.max(0, expire - keyspace.now());
         return new RespValue.Int((remainingMillis + unitMillis / 2) / unitMillis);
     }
 }

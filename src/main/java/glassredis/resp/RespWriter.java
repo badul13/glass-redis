@@ -10,6 +10,7 @@ public final class RespWriter {
 
     private static final byte[] CRLF = {'\r', '\n'};
     private static final byte[] NULL_BULK = "$-1\r\n".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] NULL_ARRAY = "*-1\r\n".getBytes(StandardCharsets.US_ASCII);
 
     private final OutputStream out;
 
@@ -34,6 +35,7 @@ public final class RespWriter {
                 }
             }
             case RespValue.Nil ignored -> out.write(NULL_BULK);
+            case RespValue.NilArray ignored -> out.write(NULL_ARRAY);
             case RespValue.NoReply ignored -> {
             }
         }

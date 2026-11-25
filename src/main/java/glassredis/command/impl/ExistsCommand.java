@@ -2,7 +2,6 @@ package glassredis.command.impl;
 
 import glassredis.command.Command;
 import glassredis.command.Context;
-import glassredis.command.Errors;
 import glassredis.resp.RespValue;
 import glassredis.store.Key;
 
@@ -23,12 +22,9 @@ public final class ExistsCommand implements Command {
 
     @Override
     public RespValue execute(Context ctx, List<byte[]> args) {
-        if (args.isEmpty()) {
-            return Errors.wrongNumberOfArguments(name());
-        }
         long count = 0;
         for (byte[] key : args) {
-            if (ctx.keyspace().get(new Key(key)) != null) {
+            if (ctx.keyspace().getNoTouch(new Key(key)) != null) {
                 count++;
             }
         }
