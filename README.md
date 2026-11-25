@@ -19,12 +19,13 @@ Redis 서버를 Java로 직접 구현해 **내부에서 벌어지는 일을 실�
   (Redis 7.2 와 섞어 붙음 - Redis 레플리카가 glass 마스터에, glass 레플리카가 Redis 마스터에)
 
 만료된 키가 **언제 실제로 지워지는지**를 대시보드로 표기
+
 `EX 10` 을 걸어도 10초에 지워지지 않고, 읽으러 온 명령이 발견하거나 100ms 마다 도는
 샘플링이 그 키를 뽑아야 사라짐
 
 ## 왜 만드나
 
-Redis, JAVA 밑단부터 복습 / 백엔드 실무 지식 쌓기
+Redis, Java 밑단부터 복습 / 백엔드 실무 지식 쌓기
 
 `SET key value EX 10` 을 치면 10초 뒤에 키가 사라진다는 건 알지만,
 **누가 언제 그걸 지우는지**는 문서를 읽어도 잘 와닿지 않으니까 직접 해보자
@@ -42,8 +43,6 @@ Java 21 이상 필요
 ./gradlew test         # 테스트
 ./gradlew run          # 실행 (서버 6380, 대시보드 8080)
 ```
-
-
 
 옵션: `--port` `--bind` `--dashboard-bind` `--dashboard-port` `--no-dashboard`
 
@@ -71,7 +70,7 @@ RDB 옵션: `--dir` `--dbfilename` `--save` `--stop-writes-on-bgsave-error`
 ./gradlew run --args="--port 6381 --dashboard-port 8081 --replicaof 127.0.0.1 6380"
 ```
 
-복제 옵션: `--replicaof` `--replica-read-only` `--repl-diskless-sync` `--repl-diskless-sync-delay` `--repl-backlog-size` `--repl-backlog-ttl` `--repl-ping-replica-period` `--repl-timeout` `--client-output-buffer-limit`
+복제 옵션: `--replicaof` `--replica-read-only` `--repl-diskless-sync` `--repl-diskless-sync-delay` `--repl-backlog-size` `--repl-backlog-ttl` `--repl-ping-replica-period` `--repl-timeout` `--client-output-buffer-limit` `--replica-ignore-disk-write-errors`
 
 ## Docker
 
