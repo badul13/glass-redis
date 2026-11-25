@@ -176,7 +176,7 @@ final class Persistence implements ServerControl, Replicator.Children {
      * 예약된 BGSAVE 는 replicationCron 뒤 scheduledBgsave()
      */
     void cron() {
-        if (!childActive() && aof.rewriteScheduled()) {
+        if (!childActive() && aof.rewriteScheduled() && !aof.rewriteLimited()) {
             aof.rewriteInBackground(keyspace, "예약된 BGREWRITEAOF");
         }
         if (childActive()) {

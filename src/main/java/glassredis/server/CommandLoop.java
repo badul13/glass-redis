@@ -13,6 +13,7 @@ import glassredis.observe.ReplicationSnapshot;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
 import glassredis.persistence.AppendOnlyLog;
+import glassredis.persistence.Fsync;
 import glassredis.persistence.RdbLoader;
 import glassredis.persistence.Snapshot;
 import glassredis.replication.Replicator;
@@ -227,6 +228,12 @@ final class CommandLoop implements AutoCloseable {
                 }
             } catch (IOException e) {
                 return "받은 RDB 를 " + target + " 로 옮기지 못함: " + e.getMessage();
+            }
+            try {
+                // readSyncBulkPayload - 이름 바꾼 뒤 폴더 fsync, 실패면 동기화 취소
+                Fsync.directoryOf(target);
+            } catch (IOException e) {
+                return "RDB 폴더를 fsync 하지 못함: " + e.getMessage();
             }
             log("MASTER <-> REPLICA 동기화: 메모리로 로드합니다");
             RdbLoader.Result loaded = snapshot != null
@@ -509,19 +516,22 @@ final class CommandLoop implements AutoCloseable {
         updateDictResizePolicy();
         while (running) {
             try {
-                // 큐가 비면 곧 대기 - beforeSleep
-                boolean slept = queue.isEmpty();
-                if (slept) {
-                    beforeSleep();
-                }
+                // aeMain 한 바퀴 - beforeSleep → 대기 → afterSleep → 그때 준비된 이벤트 전부 처리
+                // 큐가 빌 때만 beforeSleep 하면 쉬지 않는 부하에서 AOF write·레플리카 전송·응답이 무한히 밀림
+                beforeSleep();
                 Runnable task = queue.take();
-                if (slept) {
-                    // afterSleep - 명령 밖에서 쓸 시각 스냅샷 갱신
-                    context.keyspace().updateCommandTime();
+                // afterSleep - 명령 밖에서 쓸 시각 스냅샷 갱신
+                context.keyspace().updateCommandTime();
+                // 이번 바퀴에 처리할 몫 - 처리 중 새로 들어온 것은 다음 바퀴 (epoll 이 돌려준 이벤트만 처리)
+                int fired = queue.size();
+                runTask(task);
+                for (int i = 0; i < fired && running; i++) {
+                    Runnable next = queue.poll();
+                    if (next == null) {
+                        break;
+                    }
+                    runTask(next);
                 }
-                task.run();
-                // 작업 안에서 자식 작업이 시작·종료됐을 수 있음
-                updateDictResizePolicy();
             } catch (InterruptedException e) {
                 return; // close()
             } catch (Throwable fatal) {
@@ -531,6 +541,12 @@ final class CommandLoop implements AutoCloseable {
                 return;
             }
         }
+    }
+
+    private void runTask(Runnable task) {
+        task.run();
+        // 작업 안에서 자식 작업이 시작·종료됐을 수 있음
+        updateDictResizePolicy();
     }
 
     /** serverPanic - 저장 없이 서버 종료, 실행 스레드에서 호출 */

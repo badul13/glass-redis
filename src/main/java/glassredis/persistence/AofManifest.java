@@ -132,6 +132,8 @@ public final class AofManifest {
         Files.write(temp, format().getBytes(StandardCharsets.UTF_8));
         Fsync.file(temp);
         Fsync.replace(temp, dir.resolve(MANIFEST_NAME));
+        // 새 AOF 파일이 폴더에 생겼을 수 있음 - persistAofManifest 의 fsyncFileDir
+        Fsync.directoryOf(dir.resolve(MANIFEST_NAME));
     }
 
     /** 없으면 빈 목록 - aofLoadManifestFromDisk */

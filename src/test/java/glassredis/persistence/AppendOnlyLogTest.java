@@ -168,6 +168,29 @@ class AppendOnlyLogTest {
     }
 
     @Test
+    @DisplayName("재작성 연속 3번 실패 - 다음 자동·예약 재작성 제한, BGREWRITEAOF 예약은 제한 해제")
+    void rewriteLimitedAfterThreeFailures() throws Exception {
+        AppendOnlyLog aof = open(new Keyspace(), 0, 64L << 20);
+        // 임시 base 자리를 비지 않은 폴더로 막아 쓰기 실패
+        Path temp = dir.resolve("temp-rewriteaof-bg-" + ProcessHandle.current().pid() + ".aof");
+        Files.createDirectories(temp.resolve("block"));
+        for (int i = 0; i < 3; i++) {
+            assertFalse(aof.rewriteLimited(), (i) + "번 실패까지는 제한 없음");
+            assertEquals(null, aof.rewriteInBackground(new Keyspace(), "test"));
+            while (aof.rewriting()) {
+                aof.checkRewriteDone();
+                Thread.sleep(10);
+            }
+        }
+        assertEquals(3, aof.consecutiveRewriteFailures());
+        assertTrue(aof.rewriteLimited(), "3번 실패 - 1분 대기");
+        assertTrue(aof.rewriteLimited(), "대기 중");
+
+        aof.scheduleRewrite();
+        assertFalse(aof.rewriteLimited(), "수동 BGREWRITEAOF 예약은 실패 횟수 초기화");
+    }
+
+    @Test
     @DisplayName("appendfsync always 쓰기 실패 - 되돌릴 수 없어 종료")
     void alwaysPolicyStopsOnWriteError() throws IOException {
         AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, true,

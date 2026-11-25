@@ -126,6 +126,13 @@ public final class AppendOnlyLog implements AutoCloseable {
     private String lastWriteError;
     /** 쓰기 오류 재시도 시각 (밀리초) - cron 1초 주기 */
     private long lastWriteRetryMillis;
+    /** stat_aofrw_consecutive_failures - 성공하면 0 */
+    private int consecutiveRewriteFailures;
+    /** aofRewriteLimited 의 static 상태 - 다음 대기 분, 다음 허용 시각 (초) */
+    private int nextRewriteDelayMinutes;
+    private long nextRewriteTime;
+    private static final int REWRITE_LIMIT_THRESHOLD = 3;
+    private static final int REWRITE_LIMIT_MAX_MINUTES = 60;
     /** getTempIncrAofName - 동기화 뒤 첫 재작성 동안 쓰는 incr, manifest 에 없음 */
     static final String TEMP_INCR_NAME = "temp-" + AofManifest.FILENAME + ".incr";
     /** 쓰기 오류 로그 시각 (초) - AOF_WRITE_LOG_ERROR_RATE */
@@ -646,23 +653,58 @@ public final class AppendOnlyLog implements AutoCloseable {
      * 다른 백그라운드 작업 확인은 호출하는 쪽 몫 (hasActiveChildProcess)
      */
     public void autoRewrite(Keyspace keyspace) {
-        if (config.enabled() && rewrite == null && config.rewritePercentage() > 0
+        // aof_state == AOF_ON - 동기화 중(OFF)·동기화 뒤 재작성 대기(WAIT_REWRITE)는 제외
+        if (config.enabled() && !suspended && !waitRewrite && rewrite == null && config.rewritePercentage() > 0
                 && currentSize > config.rewriteMinSize()) {
             long base = rewriteBaseSize > 0 ? rewriteBaseSize : 1;
             long growth = currentSize * 100 / base - 100;
-            if (growth >= config.rewritePercentage()) {
+            if (growth >= config.rewritePercentage() && !rewriteLimited()) {
                 rewriteInBackground(keyspace, "자동 (" + growth + "% 증가)");
             }
         }
+    }
+
+    /**
+     * aofRewriteLimited - 연속 3번 실패하면 1분부터 두 배씩(최대 60분) 다음 자동·예약 재작성을 늦춤
+     * 부를 때마다 판정 상태가 바뀜 - Redis 처럼 다른 조건이 다 맞은 뒤 마지막에 호출
+     */
+    public boolean rewriteLimited() {
+        if (consecutiveRewriteFailures < REWRITE_LIMIT_THRESHOLD) {
+            // 제한에서 풀리는 중일 수 있음 - 상태 초기화
+            nextRewriteDelayMinutes = 0;
+            nextRewriteTime = 0;
+            return false;
+        }
+        long now = System.currentTimeMillis() / 1000;
+        if (nextRewriteTime != 0) {
+            if (now < nextRewriteTime) {
+                return true;
+            }
+            nextRewriteTime = 0;
+            return false;
+        }
+        nextRewriteDelayMinutes = nextRewriteDelayMinutes == 0 ? 1 : nextRewriteDelayMinutes * 2;
+        if (nextRewriteDelayMinutes > REWRITE_LIMIT_MAX_MINUTES) {
+            nextRewriteDelayMinutes = REWRITE_LIMIT_MAX_MINUTES;
+        }
+        nextRewriteTime = now + nextRewriteDelayMinutes * 60L;
+        System.err.printf("[glass-redis] AOF 재작성 연속 실패로 제한 - %d분 뒤 다시 시도%n", nextRewriteDelayMinutes);
+        return true;
+    }
+
+    /** stat_aofrw_consecutive_failures */
+    public int consecutiveRewriteFailures() {
+        return consecutiveRewriteFailures;
     }
 
     public boolean rewriting() {
         return rewrite != null;
     }
 
-    /** BGSAVE 중 BGREWRITEAOF - 끝나면 시작 (aof_rewrite_scheduled) */
+    /** BGSAVE 중 BGREWRITEAOF - 끝나면 시작 (aof_rewrite_scheduled), 수동 요청이라 실패 제한 해제 */
     public void scheduleRewrite() {
         rewriteScheduled = true;
+        consecutiveRewriteFailures = 0;
     }
 
     public boolean rewriteScheduled() {
@@ -768,6 +810,7 @@ public final class AppendOnlyLog implements AutoCloseable {
                     ? e.getMessage() : e.getCause().getMessage()).join();
             publishFailure("임시 파일 쓰기 실패: " + reason);
             System.err.println("[glass-redis] AOF 재작성 실패: " + reason);
+            consecutiveRewriteFailures++;
             retryIfWaiting();
             return;
         }
@@ -788,6 +831,7 @@ public final class AppendOnlyLog implements AutoCloseable {
             next.persist(aofDir);
         } catch (IOException e) {
             publishFailure("새 base 로 교체 실패: " + e.getMessage());
+            consecutiveRewriteFailures++;
             try {
                 Files.deleteIfExists(basePath);
                 if (incrName != null && Files.exists(aofDir.resolve(incrName))) {
@@ -804,6 +848,7 @@ public final class AppendOnlyLog implements AutoCloseable {
             channelName = incrName;
         }
         manifest = next;
+        consecutiveRewriteFailures = 0;
         if (config.enabled()) {
             currentSize = baseBytes + lastIncrSize;
             rewriteBaseSize = currentSize;

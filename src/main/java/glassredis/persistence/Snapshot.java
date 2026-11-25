@@ -463,6 +463,12 @@ public final class Snapshot {
             }
             return "Write error while saving DB to the disk: " + e.getMessage();
         }
+        try {
+            // rdbSave - 이름 바꾼 뒤 폴더도 fsync, 실패면 저장 실패
+            Fsync.directoryOf(file);
+        } catch (IOException e) {
+            return "Failed to fsync directory while saving DB: " + e.getMessage();
+        }
         return null;
     }
 }

@@ -77,6 +77,28 @@ class CommandLoopTest {
     }
 
     @Test
+    @DisplayName("큐가 한 번도 비지 않는 부하에도 응답 전달 - aeMain 처럼 바퀴마다 beforeSleep")
+    void repliesUnderConstantLoad() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean busy = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Command[] spin = new Command[1];
+        // 실행될 때마다 자기 자신을 다시 넣음 - 큐가 비는 순간 없음
+        spin[0] = new StubCommand(ctx -> {
+            if (busy.get()) {
+                loop.submit(spin[0], STUB, 2);
+            }
+            return RespValue.OK;
+        });
+        loop.submit(spin[0], STUB, 2);
+        loop.submit(spin[0], STUB, 3);
+        try {
+            assertEquals(RespValue.OK,
+                    loop.submit(new StubCommand(ctx -> RespValue.OK), STUB, 1).get(2, TimeUnit.SECONDS));
+        } finally {
+            busy.set(false);
+        }
+    }
+
+    @Test
     @DisplayName("명령 예외는 에러 응답으로 변환 - 실행 스레드는 계속 동작")
     void survivesCommandFailure() throws Exception {
         Command broken = new StubCommand(ctx -> {
