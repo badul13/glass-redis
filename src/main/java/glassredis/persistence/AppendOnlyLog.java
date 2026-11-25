@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 /**
@@ -121,6 +122,17 @@ public final class AppendOnlyLog implements AutoCloseable {
     private long flushPostponedStart;
     /** aof_delayed_fsync - 2초 넘게 밀려 fsync 를 안 기다리고 쓴 횟수 */
     private long delayedFsync;
+    /** aof_last_write_status·errno - null 이면 C_OK, 아니면 실패 사유 */
+    private String lastWriteError;
+    /** 쓰기 오류 재시도 시각 (밀리초) - cron 1초 주기 */
+    private long lastWriteRetryMillis;
+    /** getTempIncrAofName - 동기화 뒤 첫 재작성 동안 쓰는 incr, manifest 에 없음 */
+    static final String TEMP_INCR_NAME = "temp-" + AofManifest.FILENAME + ".incr";
+    /** 쓰기 오류 로그 시각 (초) - AOF_WRITE_LOG_ERROR_RATE */
+    private long lastWriteErrorLog;
+    private static final long WRITE_ERROR_LOG_RATE = 30;
+    /** aof_bio_fsync_status·errno - fsync 스레드가 씀, null 이면 C_OK */
+    private final AtomicReference<String> bioFsyncError = new AtomicReference<>();
 
     /** bio 스레드 - fsync와 옛 파일 닫기 */
     private final ExecutorService fsyncThread = Executors.newSingleThreadExecutor(
@@ -225,7 +237,7 @@ public final class AppendOnlyLog implements AutoCloseable {
      * DB가 바뀌면 SELECT 먼저, MULTI·EXEC는 SELECT 없이
      */
     public void feed(List<byte[]> argv) {
-        if (!config.enabled() || suspended) {
+        if (!accepting()) {
             return;
         }
         if (selectedDb != 0) {
@@ -244,7 +256,7 @@ public final class AppendOnlyLog implements AutoCloseable {
      * @param dbid -1 이면 SELECT 없이 (MULTI·EXEC)
      */
     public void feed(int dbid, List<byte[]> argv) {
-        if (!config.enabled() || suspended) {
+        if (!accepting()) {
             return;
         }
         if (dbid < 0) {
@@ -256,7 +268,7 @@ public final class AppendOnlyLog implements AutoCloseable {
 
     /** 명령 하나가 여러 전파를 낳으면 트랜잭션으로 - propagatePendingCommands */
     public void feedAll(List<List<byte[]>> commands) {
-        if (!config.enabled() || suspended || commands.isEmpty()) {
+        if (!accepting() || commands.isEmpty()) {
             return;
         }
         boolean transaction = commands.size() > 1;
@@ -290,6 +302,7 @@ public final class AppendOnlyLog implements AutoCloseable {
         if (flushPostponedStart != 0) {
             flush(false);
         }
+        retryAfterWriteError();
     }
 
     /**
@@ -326,17 +339,26 @@ public final class AppendOnlyLog implements AutoCloseable {
             delayedFsync++;
         }
         byte[] bytes = buffer.toByteArray();
+        ByteBuffer out = ByteBuffer.wrap(bytes);
+        IOException failure = null;
         try {
-            ByteBuffer out = ByteBuffer.wrap(bytes);
             while (out.hasRemaining()) {
                 channel.write(out);
             }
         } catch (IOException e) {
-            System.err.println("[glass-redis] AOF 쓰기 실패, 다음에 다시 씁니다: " + e.getMessage());
+            failure = e;
+        }
+        // 쓰기 시도함 - 미룸 표시 해제 (실패여도)
+        flushPostponedStart = 0;
+        if (failure != null) {
+            handleWriteError(bytes, out.position(), failure, now);
             return;
         }
+        if (lastWriteError != null) {
+            System.err.println("[glass-redis] AOF 쓰기 오류 해소, 쓰기 명령 다시 받음");
+            lastWriteError = null;
+        }
         buffer.reset();
-        flushPostponedStart = 0;
         currentSize += bytes.length;
         lastIncrSize += bytes.length;
         if (events.enabled()) {
@@ -344,6 +366,85 @@ public final class AppendOnlyLog implements AutoCloseable {
         }
         bufferedCommands.clear();
         tryFsync(now, syncInProgress);
+    }
+
+    /**
+     * 쓰기 실패 - flushAppendOnlyFile 의 nwritten != len 분기
+     * 일부만 쓰였으면 이번 쓰기 전 길이로 truncate - 성공 시 안 쓴 것으로(-1), 실패 시 쓴 만큼 버퍼에서 제거
+     * always - 응답이 이미 나갈 상태라 되돌릴 수 없음, 종료
+     * 그 밖 - 버퍼 유지, aof_last_write_status = C_ERR → 쓰기 명령 MISCONF, cron 1초마다 재시도
+     */
+    private void handleWriteError(byte[] bytes, int written, IOException e, long now) {
+        boolean canLog = now - lastWriteErrorLog > WRITE_ERROR_LOG_RATE;
+        if (canLog) {
+            lastWriteErrorLog = now;
+        }
+        String reason;
+        if (written == 0) {
+            // 메시지 없는 예외(ClosedChannelException 등)도 오류 상태로 - null 이면 MISCONF 안 걸림
+            reason = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            if (canLog) {
+                System.err.println("[glass-redis] AOF 쓰기 실패: " + reason);
+            }
+        } else {
+            if (canLog) {
+                System.err.printf("[glass-redis] AOF 일부만 기록 (nwritten=%d, expected=%d)%n", written, bytes.length);
+            }
+            try {
+                channel.truncate(lastIncrSize);
+                written = 0;
+            } catch (IOException truncateError) {
+                if (canLog) {
+                    System.err.println("[glass-redis] AOF 일부 기록 제거 실패 - 다음 기동 시 복구 거부 가능: "
+                            + truncateError.getMessage());
+                }
+            }
+            // short write - Redis 는 ENOSPC 로 기록
+            reason = "No space left on device";
+        }
+        if (config.fsync() == FsyncPolicy.ALWAYS) {
+            throw new IllegalStateException("AOF 쓰기 실패 - appendfsync always 에서 복구 불가, 종료", e);
+        }
+        lastWriteError = reason;
+        if (written > 0) {
+            currentSize += written;
+            lastIncrSize += written;
+            buffer.reset();
+            buffer.write(bytes, written, bytes.length - written);
+        }
+    }
+
+    /** 테스트용 - 쓰기 실패 흉내 채널로 교체, 이전 채널 반환 */
+    FileChannel swapChannel(FileChannel replacement) {
+        FileChannel previous = channel;
+        channel = replacement;
+        return previous;
+    }
+
+    /** 테스트용 - cron 재시도 주기 무시하고 즉시 재시도 */
+    void retryNowForTest() {
+        lastWriteRetryMillis = 0;
+        retryAfterWriteError();
+    }
+
+    /** serverCron run_with_period(1000) - 쓰기 오류 상태면 1초마다 다시 씀 */
+    private void retryAfterWriteError() {
+        long nowMillis = System.currentTimeMillis();
+        if (lastWriteError != null && nowMillis - lastWriteRetryMillis >= 1000) {
+            lastWriteRetryMillis = nowMillis;
+            flush(false);
+        }
+    }
+
+    /**
+     * 쓰기 명령 거부 사유 - writeCommandsDeniedByDiskError 의 AOF 쪽, 문제 없으면 null
+     * AOF_OFF(꺼짐·전체 동기화 중)면 검사 안 함, write 실패 다음으로 bio fsync 실패
+     */
+    public String writeError() {
+        if (!config.enabled() || suspended) {
+            return null;
+        }
+        return lastWriteError != null ? lastWriteError : bioFsyncError.get();
     }
 
     /** try_fsync - always 는 바로, everysec 은 초가 바뀌었고 진행 중인 fsync 가 없을 때 맡김 */
@@ -398,16 +499,65 @@ public final class AppendOnlyLog implements AutoCloseable {
         return fsyncedReploff;
     }
 
-    /** stopAppendOnly - 레플리카 전체 동기화 동안 기록 멈춤 (버퍼는 지금 씀) */
+    /**
+     * stopAppendOnly - 레플리카 전체 동기화 동안 기록 멈춤
+     * 버퍼는 지금 쓰고 fsync 후 파일 닫음 (aof_fd = -1) - 이후 옛 incr 에 덧붙는 일 없음
+     * 진행 중 재작성은 버림 (killAppendOnlyChild) - 옛 데이터 기준이라
+     */
     public void suspend() {
         if (!config.enabled()) {
             return;
         }
         flush(true);
+        if (channel != null) {
+            try {
+                channel.force(false);
+                lastFsyncSecond = System.currentTimeMillis() / 1000;
+            } catch (IOException e) {
+                System.err.println("[glass-redis] AOF fsync 실패: " + e.getMessage());
+            }
+            try {
+                channel.close();
+            } catch (IOException e) {
+                System.err.println("[glass-redis] AOF 닫기 실패: " + e.getMessage());
+            }
+            channel = null;
+        }
         suspended = true;
+        selectedDb = -1;
+        rewriteScheduled = false;
+        lastIncrSize = 0;
+        lastIncrFsyncOffset = 0;
         // AOF_OFF - ACK 에 FACK 안 붙음
         fsyncedReploff = -1;
         fsyncedReploffPending.set(0);
+        killRewrite();
+        buffer.reset();
+        bufferedCommands.clear();
+    }
+
+    /** killAppendOnlyChild - 쓰던 임시 base 는 쓰기 끝난 뒤 삭제 */
+    private void killRewrite() {
+        Rewrite killed = rewrite;
+        if (killed == null) {
+            return;
+        }
+        rewrite = null;
+        killed.written().whenComplete((ok, e) -> {
+            try {
+                Files.deleteIfExists(killed.temp());
+            } catch (IOException ignored) {
+                // 다음 재작성이 덮어씀
+            }
+        });
+    }
+
+    /**
+     * feedAppendOnlyFile 의 기록 조건 - AOF_ON, 또는 AOF_WAIT_REWRITE 이면서 재작성 진행 중
+     * 재작성 예약만 된 동안은 버림 - 재작성 시작 시점의 데이터에 포함
+     */
+    private boolean accepting() {
+        return config.enabled() && !suspended && (!waitRewrite || rewrite != null);
     }
 
     public boolean suspended() {
@@ -429,11 +579,21 @@ public final class AppendOnlyLog implements AutoCloseable {
         fsyncedReploff = 0;
         waitRewrite = true;
         lastFsyncSecond = System.currentTimeMillis() / 1000;
+        // "AOF reopen, just ignore the last error" - 이전 쓰기·fsync 오류 상태 해제
+        bioFsyncError.set(null);
+        lastWriteError = null;
         if (otherChildActive) {
             rewriteScheduled = true;
             return null;
         }
-        return rewriteInBackground(keyspace, "레플리카 동기화");
+        String failure = rewriteInBackground(keyspace, "레플리카 동기화");
+        if (failure != null) {
+            // 재작성 시작 실패 - aof_state = AOF_OFF
+            suspended = true;
+            waitRewrite = false;
+            fsyncedReploff = -1;
+        }
+        return failure;
     }
 
     /** aof_background_fsync - 호출하는 쪽이 진행 중 아님을 확인 */
@@ -455,8 +615,13 @@ public final class AppendOnlyLog implements AutoCloseable {
                 syncedOffset.accumulateAndGet(offset, Math::max);
                 fsyncedReploffPending.set(reploff);
                 publishFsync(name, offset, System.nanoTime() - start);
+                bioFsyncError.set(null);
             } catch (IOException e) {
-                System.err.println("[glass-redis] AOF fsync 실패: " + e.getMessage());
+                // 처음 실패할 때만 로그 - bio.c 동일
+                String reason = e.getMessage() == null ? e.toString() : e.getMessage();
+                if (bioFsyncError.getAndSet(reason) == null) {
+                    System.err.println("[glass-redis] AOF fsync 실패: " + reason);
+                }
             } finally {
                 fsyncInProgress.set(false);
             }
@@ -555,15 +720,18 @@ public final class AppendOnlyLog implements AutoCloseable {
         if (!config.enabled()) {
             return;
         }
-        AofManifest next = manifest.copy();
-        String name = next.newIncr();
+        // AOF_WAIT_REWRITE - manifest 밖 임시 incr 에 누적, 재작성 끝나면 새 incr 로 이름 변경
+        AofManifest next = waitRewrite ? manifest : manifest.copy();
+        String name = waitRewrite ? TEMP_INCR_NAME : next.newIncr();
         FileChannel opened = FileChannel.open(aofDir.resolve(name), StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
-        try {
-            next.persist(aofDir);
-        } catch (IOException e) {
-            opened.close();
-            throw e;
+        if (!waitRewrite) {
+            try {
+                next.persist(aofDir);
+            } catch (IOException e) {
+                opened.close();
+                throw e;
+            }
         }
         // 옛 파일은 백그라운드에서 fsync 후 닫기 - aof_background_fsync_and_close
         FileChannel old = channel;
@@ -600,26 +768,40 @@ public final class AppendOnlyLog implements AutoCloseable {
                     ? e.getMessage() : e.getCause().getMessage()).join();
             publishFailure("임시 파일 쓰기 실패: " + reason);
             System.err.println("[glass-redis] AOF 재작성 실패: " + reason);
+            retryIfWaiting();
             return;
         }
 
         AofManifest next = manifest.copy();
         String baseName = next.newBase(config.rdbPreamble());
         Path basePath = aofDir.resolve(baseName);
+        String incrName = null;
         long baseBytes;
         try {
             Fsync.replace(done.temp(), basePath);
             baseBytes = Files.size(basePath);
+            if (waitRewrite) {
+                incrName = next.newIncr();
+                Fsync.replace(aofDir.resolve(TEMP_INCR_NAME), aofDir.resolve(incrName));
+            }
             next.markRewrittenIncrAsHistory(channel != null);
             next.persist(aofDir);
         } catch (IOException e) {
             publishFailure("새 base 로 교체 실패: " + e.getMessage());
             try {
                 Files.deleteIfExists(basePath);
+                if (incrName != null && Files.exists(aofDir.resolve(incrName))) {
+                    // 임시 incr 로 되돌림 - 다음 재작성까지 계속 기록
+                    Fsync.replace(aofDir.resolve(incrName), aofDir.resolve(TEMP_INCR_NAME));
+                }
             } catch (IOException ignored) {
                 // 다음 재작성이 덮어씀
             }
+            retryIfWaiting();
             return;
+        }
+        if (incrName != null) {
+            channelName = incrName;
         }
         manifest = next;
         if (config.enabled()) {
@@ -651,6 +833,13 @@ public final class AppendOnlyLog implements AutoCloseable {
         if (events.enabled()) {
             events.publish(new Event.AofRewriteFinished(baseName, baseBytes, done.sizeBefore(), currentSize,
                     System.nanoTime() - done.startNanos(), List.copyOf(removed)));
+        }
+    }
+
+    /** 동기화 뒤 첫 재작성 실패 - AOF_ON 으로 못 넘어가 다시 예약 (backgroundRewriteDoneHandler cleanup) */
+    private void retryIfWaiting() {
+        if (waitRewrite) {
+            rewriteScheduled = true;
         }
     }
 

@@ -99,7 +99,11 @@ final class Persistence implements ServerControl, Replicator.Children {
 
     /** 쓰기 명령·PING 거부 사유 - 받아도 되면 null (writeCommandsDeniedByDiskError) */
     RespValue denyWrites() {
-        return snapshot != null && snapshot.deniesWrites() ? MISCONF : null;
+        if (snapshot != null && snapshot.deniesWrites()) {
+            return MISCONF;
+        }
+        String aofError = aof.writeError();
+        return aofError == null ? null : new RespValue.Err("MISCONF Errors writing to the AOF file: " + aofError);
     }
 
     @Override

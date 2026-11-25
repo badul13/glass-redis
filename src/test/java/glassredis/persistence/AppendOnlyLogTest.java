@@ -23,6 +23,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Timeout(10)
@@ -87,6 +88,143 @@ class AppendOnlyLogTest {
                         + "*1\r\n$5\r\nMULTI\r\n*2\r\n$3\r\nDEL\r\n$1\r\ny\r\n*3\r\n$3\r\nSET\r\n$1\r\ny\r\n$1\r\n2\r\n"
                         + "*1\r\n$4\r\nEXEC\r\n",
                 file("appendonly.aof.1.incr.aof"));
+    }
+
+    private static final String SET_A = "*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n";
+
+    private static FaultyChannel faulty(AppendOnlyLog aof) {
+        FaultyChannel channel = new FaultyChannel(aof.swapChannel(null));
+        aof.swapChannel(channel);
+        return channel;
+    }
+
+    @Test
+    @DisplayName("일부만 쓰인 AOF - truncate 로 제거, MISCONF 사유 유지, 재시도 시 전체 기록 후 해제")
+    void shortWriteIsTruncatedAndRetried() throws IOException {
+        AppendOnlyLog aof = open(new Keyspace(), 100, 64L << 20);
+        FaultyChannel channel = faulty(aof);
+        channel.failAfter = 5;
+        aof.feedAll(List.of(argv("SET", "a", "1")));
+        aof.flush(true);
+
+        assertEquals("", file("appendonly.aof.1.incr.aof"), "일부 기록 잘라냄");
+        assertEquals("No space left on device", aof.writeError());
+
+        channel.failAfter = -1;
+        aof.retryNowForTest();
+        assertEquals(SET_A, file("appendonly.aof.1.incr.aof"));
+        assertEquals(null, aof.writeError());
+    }
+
+    @Test
+    @DisplayName("truncate 도 실패 - 쓴 만큼 버퍼에서 빼고 나머지만 재기록 (중복 없음)")
+    void shortWriteKeptWhenTruncateFails() throws IOException {
+        AppendOnlyLog aof = open(new Keyspace(), 100, 64L << 20);
+        FaultyChannel channel = faulty(aof);
+        channel.failAfter = 5;
+        channel.failTruncate = true;
+        aof.feedAll(List.of(argv("SET", "a", "1")));
+        aof.flush(true);
+        assertEquals(SET_A.substring(0, 5), file("appendonly.aof.1.incr.aof"));
+
+        channel.failAfter = -1;
+        aof.retryNowForTest();
+        assertEquals(SET_A, file("appendonly.aof.1.incr.aof"));
+        assertEquals(null, aof.writeError());
+    }
+
+    @Test
+    @DisplayName("한 바이트도 못 씀 - 버퍼 유지, 사유는 예외 메시지")
+    void failedWriteKeepsBuffer() throws IOException {
+        AppendOnlyLog aof = open(new Keyspace(), 100, 64L << 20);
+        FaultyChannel channel = faulty(aof);
+        channel.failAfter = 0;
+        aof.feedAll(List.of(argv("SET", "a", "1")));
+        aof.flush(true);
+        assertEquals("", file("appendonly.aof.1.incr.aof"));
+        assertNotNull(aof.writeError());
+
+        channel.failAfter = -1;
+        aof.retryNowForTest();
+        assertEquals(SET_A, file("appendonly.aof.1.incr.aof"));
+    }
+
+    @Test
+    @DisplayName("메시지 없는 예외도 오류 상태 - 동기화 뒤 재개하면 해제 (AOF reopen)")
+    void messagelessErrorCountsAndResumeClears() throws IOException {
+        AppendOnlyLog aof = open(new Keyspace(), 0, 64L << 20);
+        FaultyChannel channel = faulty(aof);
+        channel.failAfter = 0;
+        channel.failure = new java.nio.channels.ClosedChannelException();
+        aof.feedAll(List.of(argv("SET", "a", "1")));
+        aof.flush(true);
+        assertEquals("ClosedChannelException", aof.writeError());
+
+        channel.failAfter = -1;
+        aof.suspend();
+        assertEquals(null, aof.writeError(), "AOF_OFF 동안 검사 안 함");
+        assertEquals(null, aof.resumeAfterSync(new Keyspace(), true));
+        assertEquals(null, aof.writeError(), "재개 시 이전 오류 해제");
+    }
+
+    @Test
+    @DisplayName("appendfsync always 쓰기 실패 - 되돌릴 수 없어 종료")
+    void alwaysPolicyStopsOnWriteError() throws IOException {
+        AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, true,
+                AppendOnlyLog.FsyncPolicy.ALWAYS, 100, 64L << 20, false), EventBus.NONE);
+        aof.start(new Keyspace(), CommandRegistry.withBuiltins());
+        opened.add(aof);
+        FaultyChannel channel = faulty(aof);
+        channel.failAfter = 0;
+        aof.feedAll(List.of(argv("SET", "a", "1")));
+        assertThrows(IllegalStateException.class, () -> aof.flush(true));
+        // 정리 단계 close() 의 flush 용
+        channel.failAfter = -1;
+    }
+
+    @Test
+    @DisplayName("레플리카 전체 동기화 뒤 - 재작성 끝날 때까지 manifest 밖 임시 incr, 끝나면 새 incr 로")
+    void syncWritesToTempIncrUntilRewriteDone() throws Exception {
+        AppendOnlyLog aof = open(new Keyspace(), 0, 64L << 20);
+        aof.feedAll(List.of(argv("SET", "old", "1")));
+        aof.flush(true);
+        String oldIncr = file("appendonly.aof.1.incr.aof");
+
+        aof.suspend();
+        Keyspace synced = new Keyspace();
+        synced.put(Key.of("fromMaster"), Entry.of("v".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(null, aof.resumeAfterSync(synced, false));
+        aof.feedAll(List.of(argv("SET", "after", "sync")));
+        aof.flush(true);
+
+        assertEquals(oldIncr, file("appendonly.aof.1.incr.aof"), "옛 incr 에 덧붙지 않음");
+        assertTrue(file(AppendOnlyLog.TEMP_INCR_NAME).contains("after"), "임시 incr 에 기록");
+        assertFalse(file(AofManifest.MANIFEST_NAME).contains("temp-"), "임시 incr 는 manifest 밖");
+
+        while (aof.rewriting()) {
+            aof.checkRewriteDone();
+            Thread.sleep(10);
+        }
+        assertEquals("file appendonly.aof.2.base.aof seq 2 type b\nfile appendonly.aof.2.incr.aof seq 2 type i\n",
+                file(AofManifest.MANIFEST_NAME));
+        assertTrue(file("appendonly.aof.2.incr.aof").contains("after"), "임시 incr 가 새 incr 로");
+        assertFalse(Files.exists(dir.resolve(AppendOnlyLog.DIRNAME).resolve("appendonly.aof.1.incr.aof")));
+
+        aof.feedAll(List.of(argv("SET", "later", "x")));
+        aof.flush(true);
+        assertTrue(file("appendonly.aof.2.incr.aof").contains("later"), "이름 바뀐 파일에 계속 기록");
+    }
+
+    @Test
+    @DisplayName("동기화 뒤 재작성이 예약만 된 동안 - 기록 안 함 (재작성 시작 시점 데이터에 포함)")
+    void scheduledRewriteDropsCommandsUntilStarted() throws IOException {
+        AppendOnlyLog aof = open(new Keyspace(), 0, 64L << 20);
+        aof.suspend();
+        assertEquals(null, aof.resumeAfterSync(new Keyspace(), true));
+        assertTrue(aof.rewriteScheduled());
+        aof.feedAll(List.of(argv("SET", "dropped", "1")));
+        aof.flush(true);
+        assertEquals("", file("appendonly.aof.1.incr.aof"));
     }
 
     @Test
