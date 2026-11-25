@@ -32,6 +32,8 @@ public final class DashboardServer implements AutoCloseable {
     private static final Duration TICK = Duration.ofMillis(100);
 
     private static final Duration SORTED_SET_PERIOD = Duration.ofMillis(200);
+    /** 스킵 리스트 스트림 무전송 한도 - 넘으면 주석 줄로 연결 확인 */
+    private static final long HEARTBEAT_MILLIS = 1000;
 
     private static final long SNAPSHOT_PERIOD_MILLIS = 500;
 
@@ -212,15 +214,25 @@ public final class DashboardServer implements AutoCloseable {
 
         try (OutputStream body = exchange.getResponseBody()) {
             String last = null;
+            long lastWrite = System.currentTimeMillis();
             while (running) {
                 SortedSetSnapshot snapshot = sortedSet.apply(key);
+                long now = System.currentTimeMillis();
                 if (snapshot != null) {
                     String json = DashboardJson.sortedSet(snapshot);
                     if (!json.equals(last)) {
                         send(body, "zset", json);
                         body.flush();
                         last = json;
+                        lastWrite = now;
                     }
+                }
+                // 변화 없으면 무전송 → 탭 닫혀도 IOException 없음, 루프 영구 지속
+                // SSE 주석 줄 - 화면은 무시, 끊긴 연결은 쓰기 실패로 감지
+                if (now - lastWrite >= HEARTBEAT_MILLIS) {
+                    body.write(":\n\n".getBytes(StandardCharsets.US_ASCII));
+                    body.flush();
+                    lastWrite = now;
                 }
                 Thread.sleep(SORTED_SET_PERIOD);
             }
@@ -299,8 +311,25 @@ public final class DashboardServer implements AutoCloseable {
                 ./gradlew build</pre>
                 <p>화면을 고치는 중이라면 <code>cd dashboard</code> 에서 <code>npm run dev</code> 쪽이 빠릅니다.</p>
                 </body></html>
-                """.formatted(path);
+                """.formatted(escapeHtml(path));
         return html.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** 요청 경로 반사 - 디코딩된 값이라 태그 주입 가능, HTML 특수 문자 치환 */
+    static String escapeHtml(String text) {
+        StringBuilder out = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            switch (c) {
+                case '&' -> out.append("&amp;");
+                case '<' -> out.append("&lt;");
+                case '>' -> out.append("&gt;");
+                case '"' -> out.append("&quot;");
+                case '\'' -> out.append("&#39;");
+                default -> out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     private static String contentType(String path) {

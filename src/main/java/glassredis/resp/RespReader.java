@@ -27,6 +27,8 @@ public final class RespReader {
 
     /** $123, *2 같은 숫자 줄의 최대 길이 */
     private static final int MAX_NUMBER_LINE = 32;
+    /** 벌크 배열 첫 크기 - 이후 받은 만큼 두 배씩 */
+    private static final int INITIAL_BULK_CAPACITY = 64 * 1024;
 
     /** 소켓 read 1회 크기 - PROTO_IOBUF_LEN */
     public static final int IO_BUFFER_SIZE = 16 * 1024;
@@ -119,8 +121,7 @@ public final class RespReader {
             if (length.isEmpty() || length.getAsLong() < 0 || length.getAsLong() > MAX_BULK_LENGTH) {
                 throw new RespProtocolException("invalid bulk length");
             }
-            byte[] data = new byte[(int) length.getAsLong()];
-            readFullyOrEnd(data);
+            byte[] data = readBulkData((int) length.getAsLong(), true);
             skipOrEnd(2);
             argv.add(data);
         }
@@ -284,15 +285,29 @@ public final class RespReader {
         return b;
     }
 
-    private void readFullyOrEnd(byte[] destination) throws IOException {
+    /**
+     * 벌크 데이터 - 받은 만큼만 배열 확장 (처음 64KB, 두 배씩, 마지막은 정확히 length)
+     * 헤더 길이만큼 선할당 시 - Java 배열은 즉시 0 채움·힙 확보라 "$536870912" 한 줄에 연결당 512MB
+     * Redis 는 선할당(sdsMakeRoomForNonGreedy)이지만 malloc 은 쓰기 전 물리 메모리 미사용 - 결과만 동일하게
+     * @param endIsEof true - 끊김을 EndOfStream 으로(명령 경로), false - 프로토콜 오류로(응답 경로)
+     */
+    private byte[] readBulkData(int length, boolean endIsEof) throws IOException {
+        byte[] data = new byte[Math.min(length, INITIAL_BULK_CAPACITY)];
         int offset = 0;
-        while (offset < destination.length) {
-            int read = in.read(destination, offset, destination.length - offset);
+        while (offset < length) {
+            if (offset == data.length) {
+                data = Arrays.copyOf(data, (int) Math.min(length, data.length * 2L));
+            }
+            int read = in.read(data, offset, data.length - offset);
             if (read == -1) {
-                throw new EndOfStream();
+                if (endIsEof) {
+                    throw new EndOfStream();
+                }
+                throw new RespProtocolException("unexpected end of stream while reading bulk data");
             }
             offset += read;
         }
+        return data;
     }
 
     private void skipOrEnd(int bytes) throws IOException {
@@ -348,8 +363,7 @@ public final class RespReader {
         if (length < 0 || length > MAX_BULK_LENGTH) {
             throw new RespProtocolException("invalid bulk length");
         }
-        byte[] data = new byte[(int) length];
-        readFully(data);
+        byte[] data = readBulkData((int) length, false);
         expectCrlf();
         return data;
     }
@@ -389,18 +403,6 @@ public final class RespReader {
             return Long.parseLong(text);
         } catch (NumberFormatException e) {
             throw new RespProtocolException("expected a number, got " + text);
-        }
-    }
-
-    /** read 1회로 다 채운다는 보장 없음 - 루프 */
-    private void readFully(byte[] destination) throws IOException {
-        int offset = 0;
-        while (offset < destination.length) {
-            int read = in.read(destination, offset, destination.length - offset);
-            if (read == -1) {
-                throw new RespProtocolException("unexpected end of stream while reading bulk data");
-            }
-            offset += read;
         }
     }
 

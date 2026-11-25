@@ -26,6 +26,8 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         int port = DEFAULT_PORT;
         String bind = DEFAULT_BIND;
+        // 대시보드는 인증 없음 - 서버를 0.0.0.0 으로 열어도 따로 지정해야 외부 공개
+        String dashboardBind = DEFAULT_BIND;
         int dashboardPort = DashboardServer.DEFAULT_PORT;
         boolean dashboard = true;
         // AOF - Redis 기본값
@@ -54,8 +56,9 @@ public final class Main {
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
-                case "--port", "-p" -> port = Integer.parseInt(requireValue(args, ++i, "--port"));
+                case "--port", "-p" -> port = (int) ranged(requireValue(args, ++i, "--port"), "--port", 0, 65535);
                 case "--bind", "-b" -> bind = requireValue(args, ++i, "--bind");
+                case "--dashboard-bind" -> dashboardBind = requireValue(args, ++i, "--dashboard-bind");
                 case "--dashboard-port" ->
                         dashboardPort = Integer.parseInt(requireValue(args, ++i, "--dashboard-port"));
                 case "--no-dashboard" -> dashboard = false;
@@ -64,24 +67,30 @@ public final class Main {
                 case "--appendfsync" ->
                         fsync = AppendOnlyLog.FsyncPolicy.parse(requireValue(args, ++i, "--appendfsync"));
                 case "--auto-aof-rewrite-percentage" ->
-                        rewritePercentage = Integer.parseInt(requireValue(args, ++i, "--auto-aof-rewrite-percentage"));
+                        rewritePercentage = (int) ranged(requireValue(args, ++i, "--auto-aof-rewrite-percentage"),
+                                "--auto-aof-rewrite-percentage", 0, Integer.MAX_VALUE);
                 case "--dbfilename" -> dbFilename = requireValue(args, ++i, "--dbfilename");
                 case "--save" -> saveParams = Snapshot.Config.parseSave(requireValue(args, ++i, "--save"));
                 case "--stop-writes-on-bgsave-error" -> stopWritesOnBgsaveError =
                         yesNo(requireValue(args, ++i, "--stop-writes-on-bgsave-error"), "--stop-writes-on-bgsave-error");
                 case "--auto-aof-rewrite-min-size" ->
-                        rewriteMinSize = memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size"));
+                        rewriteMinSize = atLeast(memory(requireValue(args, ++i, "--auto-aof-rewrite-min-size")),
+                                "--auto-aof-rewrite-min-size", 0);
                 case "--aof-use-rdb-preamble" -> rdbPreamble =
                         yesNo(requireValue(args, ++i, "--aof-use-rdb-preamble"), "--aof-use-rdb-preamble");
                 case "--repl-diskless-sync" -> disklessSync =
                         yesNo(requireValue(args, ++i, "--repl-diskless-sync"), "--repl-diskless-sync");
                 case "--repl-diskless-sync-delay" ->
-                        disklessSyncDelay = Long.parseLong(requireValue(args, ++i, "--repl-diskless-sync-delay"));
-                case "--repl-backlog-size" -> backlogSize = memory(requireValue(args, ++i, "--repl-backlog-size"));
-                case "--repl-backlog-ttl" -> backlogTtl = Long.parseLong(requireValue(args, ++i, "--repl-backlog-ttl"));
-                case "--repl-ping-replica-period" ->
-                        pingPeriod = Long.parseLong(requireValue(args, ++i, "--repl-ping-replica-period"));
-                case "--repl-timeout" -> replTimeout = Long.parseLong(requireValue(args, ++i, "--repl-timeout"));
+                        disklessSyncDelay = ranged(requireValue(args, ++i, "--repl-diskless-sync-delay"),
+                                "--repl-diskless-sync-delay", 0, Integer.MAX_VALUE);
+                case "--repl-backlog-size" -> backlogSize = atLeast(memory(requireValue(args, ++i, "--repl-backlog-size")),
+                        "--repl-backlog-size", 1);
+                case "--repl-backlog-ttl" -> backlogTtl = ranged(requireValue(args, ++i, "--repl-backlog-ttl"),
+                        "--repl-backlog-ttl", 0, Long.MAX_VALUE);
+                case "--repl-ping-replica-period", "--repl-ping-slave-period" -> pingPeriod = ranged(
+                        requireValue(args, ++i, "--repl-ping-replica-period"), "--repl-ping-replica-period", 1, Integer.MAX_VALUE);
+                case "--repl-timeout" -> replTimeout = ranged(requireValue(args, ++i, "--repl-timeout"),
+                        "--repl-timeout", 1, Integer.MAX_VALUE);
                 case "--replicaof", "--slaveof" -> {
                     masterHost = requireValue(args, ++i, "--replicaof");
                     masterPort = Integer.parseInt(requireValue(args, ++i, "--replicaof"));
@@ -127,7 +136,7 @@ public final class Main {
         System.out.printf("[glass-redis] 접속: redis-cli -p %d   (또는 telnet %s %d)%n",
                 server.port(), bind, server.port());
 
-        DashboardServer dashboardServer = dashboard ? startDashboard(bind, dashboardPort, events, server) : null;
+        DashboardServer dashboardServer = dashboard ? startDashboard(dashboardBind, dashboardPort, events, server) : null;
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             if (dashboardServer != null) {
@@ -232,6 +241,31 @@ public final class Main {
         return Math.multiplyExact(Long.parseLong(text), unit);
     }
 
+    /**
+     * 정수 설정 범위 - Redis config.c 의 createIntConfig 최소·최대와 동일
+     * 범위 밖 값 - 기동 거부 (예: ping 주기 0 → cron 나머지 연산 0 나누기)
+     */
+    static long ranged(String value, String option, long min, long max) {
+        long parsed;
+        try {
+            parsed = Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(option + " 에는 정수가 필요합니다: " + value);
+        }
+        if (parsed < min || parsed > max) {
+            throw new IllegalArgumentException(option + " 범위 밖: " + value + " (" + min + "~" + max + ")");
+        }
+        return parsed;
+    }
+
+    /** 메모리 설정 하한 - Redis MEMORY_CONFIG 의 최솟값 */
+    static long atLeast(long value, String option, long min) {
+        if (value < min) {
+            throw new IllegalArgumentException(option + " 범위 밖: " + value + " (" + min + " 이상)");
+        }
+        return value;
+    }
+
     private static String requireValue(String[] args, int index, String option) {
         if (index >= args.length) {
             throw new IllegalArgumentException(option + " 에는 값이 필요합니다");
@@ -245,6 +279,7 @@ public final class Main {
 
                   --port, -p <번호>      리슨 포트 (기본 6380)
                   --bind, -b <주소>      리슨 주소 (기본 127.0.0.1, 도커에서 붙으려면 0.0.0.0)
+                  --dashboard-bind <주소>  대시보드 리슨 주소 (기본 127.0.0.1, --bind 와 별개)
                   --dashboard-port <번호>  대시보드 포트 (기본 8080)
                   --no-dashboard         대시보드를 띄우지 않는다
                   --appendonly yes|no    AOF 기록·복구 (기본 no)

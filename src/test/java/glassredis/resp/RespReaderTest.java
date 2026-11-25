@@ -255,6 +255,48 @@ class RespReaderTest {
         assertNull(reader.readCommand());
     }
 
+    @Test
+    @DisplayName("큰 $ 헤더 뒤 몇 바이트만 - 헤더 길이만큼 선할당 안 함")
+    void doesNotPreallocateHugeBulk() throws IOException {
+        byte[] raw = "*1\r\n$536870912\r\nabc".getBytes(StandardCharsets.US_ASCII);
+        int[] largestRead = {0};
+        InputStream in = new ByteArrayInputStream(raw) {
+            @Override
+            public synchronized int read(byte[] b, int off, int len) {
+                largestRead[0] = Math.max(largestRead[0], b.length);
+                return super.read(b, off, len);
+            }
+        };
+
+        assertNull(new RespReader(in).readCommand());
+        assertTrue(largestRead[0] <= 64 * 1024, "읽기 배열 " + largestRead[0] + "바이트");
+    }
+
+    @Test
+    @DisplayName("64KB 넘는 벌크 - 조각 도착에도 확장 경계 넘어 그대로 복원")
+    void growsBulkAcrossChunks() throws IOException {
+        byte[] value = new byte[200_000];
+        for (int i = 0; i < value.length; i++) {
+            value[i] = (byte) ('a' + i % 26);
+        }
+        byte[] head = ("*2\r\n$3\r\nSET\r\n$" + value.length + "\r\n").getBytes(StandardCharsets.US_ASCII);
+        byte[] raw = new byte[head.length + value.length + 2];
+        System.arraycopy(head, 0, raw, 0, head.length);
+        System.arraycopy(value, 0, raw, head.length, value.length);
+        raw[raw.length - 2] = '\r';
+        raw[raw.length - 1] = '\n';
+        // 한 번에 최대 1000바이트 - 소켓 조각 도착 흉내
+        InputStream in = new ByteArrayInputStream(raw) {
+            @Override
+            public synchronized int read(byte[] b, int off, int len) {
+                return super.read(b, off, Math.min(len, 1000));
+            }
+        };
+
+        List<byte[]> argv = new RespReader(in).readCommand();
+        assertArrayEquals(value, argv.get(1));
+    }
+
     private static RespReader reader(String raw) {
         InputStream in = new ByteArrayInputStream(raw.getBytes(StandardCharsets.UTF_8));
         return new RespReader(in);

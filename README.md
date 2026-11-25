@@ -45,7 +45,7 @@ Java 21 이상 필요
 
 
 
-옵션: `--port` `--bind` `--dashboard-port` `--no-dashboard`
+옵션: `--port` `--bind` `--dashboard-bind` `--dashboard-port` `--no-dashboard`
 
 AOF 는 Redis 처럼 기본 꺼짐:
 

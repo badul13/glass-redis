@@ -130,6 +130,38 @@ class DashboardServerTest {
         }
     }
 
+    @Test
+    @DisplayName("없는 키 스킵 리스트 - 보낼 것 없어도 주석 줄로 연결 확인")
+    void sortedSetStreamSendsHeartbeat() throws Exception {
+        try (DashboardServer quiet = new DashboardServer("127.0.0.1", 0, hub, () -> SNAPSHOT, key -> null)) {
+            quiet.start();
+            HttpResponse<Stream<String>> response = client.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + quiet.port() + "/api/zset?key=none"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofLines());
+            try (Stream<String> lines = response.body()) {
+                assertEquals(":", lines.iterator().next());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("미빌드 안내의 요청 경로 - 태그 그대로 반사 안 함")
+    void escapesRequestedPath() throws Exception {
+        try (DashboardServer unbuilt = new DashboardServer(
+                "127.0.0.1", 0, hub, () -> SNAPSHOT, key -> SORTED_SET, "nowhere/")) {
+            unbuilt.start();
+            HttpResponse<String> response = client.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + unbuilt.port()
+                            + "/%3Cscript%3Ealert(1)%3C%2Fscript%3E.js")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(404, response.statusCode());
+            assertTrue(!response.body().contains("<script>"), response.body());
+            assertTrue(response.body().contains("&lt;script&gt;alert(1)&lt;/script&gt;"), response.body());
+        }
+    }
+
     private String streamUrl() {
         return "http://127.0.0.1:" + dashboard.port() + "/api/stream";
     }

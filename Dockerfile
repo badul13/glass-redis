@@ -24,4 +24,4 @@ WORKDIR /data
 VOLUME /data
 EXPOSE 6380 8080
 # 컨테이너 밖에서 접속 → 모든 주소에서 받기, 나머지 옵션은 docker run 뒤에 이어 붙임
-ENTRYPOINT ["/app/bin/glass-redis", "--bind", "0.0.0.0"]
+ENTRYPOINT ["/app/bin/glass-redis", "--bind", "0.0.0.0", "--dashboard-bind", "0.0.0.0"]
