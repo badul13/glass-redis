@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
@@ -109,6 +110,15 @@ final class CommandLoop implements AutoCloseable {
     private volatile boolean fatal;
 
     private volatile boolean running;
+    /** repl_ignore_disk_write_error */
+    private final boolean ignoreDiskWriteErrors;
+    /** "디스크 오류 중 마스터 명령 실행" 경고 시각 (밀리초) - 10초에 한 번 */
+    private long lastDiskErrorLogMillis;
+
+    /** stop() 한 번만 */
+    private final AtomicBoolean stopping = new AtomicBoolean();
+    /** stop() 마무리(저장 포함) 끝 */
+    private final CountDownLatch stopped = new CountDownLatch(1);
 
     CommandLoop(Keyspace keyspace, EventBus events, Runnable onFatalError) {
         this(keyspace, events, new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events), null,
@@ -154,6 +164,7 @@ final class CommandLoop implements AutoCloseable {
         // lookupKey 의 lru 갱신 생략 판단 (hasActiveChildProcess), 쓰기 조회의 만료 키 강제 삭제 판단 (repl_slave_ro)
         keyspace.setChildActiveCheck(persistence::childActive);
         keyspace.setReplicaReadOnly(replication.replicaReadOnly());
+        this.ignoreDiskWriteErrors = replication.ignoreDiskWriteErrors();
         this.onFatalError = onFatalError;
     }
 
@@ -372,22 +383,70 @@ final class CommandLoop implements AutoCloseable {
         stop(true);
     }
 
+    /**
+     * 한 번만 - 치명 오류(실행 스레드)와 종료 훅(다른 스레드)이 겹쳐도 저장은 한 번
+     * 실행 스레드 종료를 끝까지 기다린 뒤 저장 - 시한 대기 후 진행 시 명령 실행과 직렬화가 동시에 돎
+     * 실행 스레드 자신이 호출하면 인터럽트 안 함 - 인터럽트 상태의 FileChannel 쓰기는 ClosedByInterruptException
+     */
     private void stop(boolean save) {
-        running = false;
-        cronTimer.shutdownNow();
-        thread.interrupt();
-        if (thread != Thread.currentThread()) {
-            try {
-                thread.join(2000);
-            } catch (InterruptedException e) {
+        if (!stopping.compareAndSet(false, true)) {
+            // 이미 종료 중 - 다른 스레드면 마무리까지 대기 (훅이 먼저 끝나 저장 도중 JVM 종료 방지)
+            if (Thread.currentThread() != thread) {
+                awaitStopped();
+            }
+            return;
+        }
+        boolean interrupted = false;
+        try {
+            running = false;
+            cronTimer.shutdownNow();
+            if (thread != Thread.currentThread()) {
+                thread.interrupt();
+                interrupted = joinLoopThread();
+            }
+            master.close();
+            if (save && !fatal) {
+                persistence.shutdown();
+            } else {
+                persistence.close();
+            }
+        } finally {
+            stopped.countDown();
+            // 저장 끝난 뒤 복원 - 저장 중 인터럽트 상태면 파일 쓰기 실패
+            if (interrupted) {
                 Thread.currentThread().interrupt();
             }
         }
-        master.close();
-        if (save && !fatal) {
-            persistence.shutdown();
-        } else {
-            persistence.close();
+    }
+
+    /** @return 대기 중 인터럽트 받았는지 - 받아도 끝까지 대기 */
+    private boolean joinLoopThread() {
+        boolean interrupted = false;
+        while (thread.isAlive()) {
+            try {
+                thread.join(2000);
+                if (thread.isAlive()) {
+                    System.err.println("[glass-redis] 실행 중인 작업 끝나기 대기 - 저장과 동시 실행 방지");
+                }
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        return interrupted;
+    }
+
+    private void awaitStopped() {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                stopped.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -468,13 +527,18 @@ final class CommandLoop implements AutoCloseable {
             } catch (Throwable fatal) {
                 // Error 또는 내부 작업 예외 - 상태 신뢰 불가
                 // 이 스레드만 죽으면 모든 클라이언트 무한 대기 - 서버 전체 종료
-                System.err.println("[glass-redis] 실행 스레드에서 치명적 오류가 발생해 서버를 종료합니다");
-                fatal.printStackTrace();
-                this.fatal = true;
-                onFatalError.run();
+                panic(fatal);
                 return;
             }
         }
+    }
+
+    /** serverPanic - 저장 없이 서버 종료, 실행 스레드에서 호출 */
+    private void panic(Throwable cause) {
+        System.err.println("[glass-redis] 실행 스레드에서 치명적 오류가 발생해 서버를 종료합니다");
+        cause.printStackTrace();
+        this.fatal = true;
+        onFatalError.run();
     }
 
     /**
@@ -503,8 +567,22 @@ final class CommandLoop implements AutoCloseable {
         List<byte[]> args = argv.subList(1, argv.size());
 
         // processCommand 순서 - 인자 수 검사 → 저장 실패 중이면 쓰기 명령·PING 거부
-        // 마스터가 보낸 건 따름 (mustObeyClient) - MISCONF·READONLY 없음
+        // 마스터가 보낸 건 거부 대신 (mustObeyClient) - 디스크 오류 중 쓰기 명령이면 종료 또는 경고
         RespValue reply = Command.checkArity(command, argv.size());
+        if (reply == null && client.isMaster() && (command.writes() || command instanceof PingCommand)
+                && persistence.denyWrites() != null) {
+            if (!ignoreDiskWriteErrors && !(command instanceof PingCommand)) {
+                // serverPanic - 여기서 바로 종료, 던지기만 하면 MasterLink 가 링크 끊김으로 바꿔 재접속
+                IllegalStateException cause = new IllegalStateException("Replica was unable to write command to disk.");
+                panic(cause);
+                throw cause;
+            }
+            long nowMillis = System.currentTimeMillis();
+            if (nowMillis > lastDiskErrorLogMillis + 10_000) {
+                lastDiskErrorLogMillis = nowMillis;
+                log("디스크에 쓸 수 없는 상태에서 마스터 명령을 실행합니다");
+            }
+        }
         if (reply == null && !client.isMaster()) {
             reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
             if (reply == null && command.writes() && master.deniesWrite(client)) {

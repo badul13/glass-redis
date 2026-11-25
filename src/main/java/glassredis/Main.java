@@ -51,6 +51,7 @@ public final class Main {
         long replTimeout = repl.timeout();
         long[] replicaOutputLimit = {repl.outputHardLimit(), repl.outputSoftLimit(), repl.outputSoftSeconds()};
         boolean replicaReadOnly = repl.replicaReadOnly();
+        boolean ignoreDiskWriteErrors = repl.ignoreDiskWriteErrors();
         String masterHost = null;
         int masterPort = 0;
 
@@ -97,6 +98,8 @@ public final class Main {
                 }
                 case "--replica-read-only", "--slave-read-only" -> replicaReadOnly =
                         yesNo(requireValue(args, ++i, "--replica-read-only"), "--replica-read-only");
+                case "--replica-ignore-disk-write-errors" -> ignoreDiskWriteErrors = yesNo(
+                        requireValue(args, ++i, "--replica-ignore-disk-write-errors"), "--replica-ignore-disk-write-errors");
                 case "--client-output-buffer-limit" -> replicaOutputLimit =
                         replicaOutputLimit(requireValue(args, ++i, "--client-output-buffer-limit"));
                 case "--help", "-h" -> {
@@ -122,7 +125,8 @@ public final class Main {
         Snapshot snapshot = new Snapshot(new Snapshot.Config(dir, dbFilename, saveParams, stopWritesOnBgsaveError), events);
         Replicator.Config replication = new Replicator.Config(disklessSync, disklessSyncDelay,
                 repl.disklessSyncMaxReplicas(), backlogSize, backlogTtl, pingPeriod, replTimeout,
-                replicaOutputLimit[0], replicaOutputLimit[1], replicaOutputLimit[2], replicaReadOnly);
+                replicaOutputLimit[0], replicaOutputLimit[1], replicaOutputLimit[2], replicaReadOnly,
+                ignoreDiskWriteErrors);
         RedisServer server = new RedisServer(bind, port, registry, events, aof, snapshot, replication);
         if (masterHost != null) {
             server.replicaOf(masterHost, masterPort);
@@ -301,6 +305,7 @@ public final class Main {
                   --client-output-buffer-limit "replica <hard> <soft> <초>"  레플리카 출력 버퍼 한도 (기본 256mb 64mb 60)
                   --replicaof <host> <port>  기동하면 이 마스터의 레플리카로 (REPLICAOF 명령과 같음)
                   --replica-read-only yes|no  레플리카일 때 쓰기 명령 거부 (기본 yes)
+                  --replica-ignore-disk-write-errors yes|no  디스크 오류 중 마스터 쓰기 명령 - no 는 종료, yes 는 경고 후 실행 (기본 no)
                   --help, -h             이 도움말
                 """);
     }

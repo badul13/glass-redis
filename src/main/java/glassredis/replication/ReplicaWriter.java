@@ -53,8 +53,12 @@ final class ReplicaWriter {
 
     /** 다 쓴 스트림 위치 - 실행 스레드가 블록 참조를 옮길 때 읽음 */
     private final AtomicLong written = new AtomicLong();
-    /** 쓰기 호출이 안 끝난 채 시작된 시각 (초), 쉬는 중이면 0 - repl_last_partial_write 대신 */
-    private volatile long writeStartedAt;
+    /**
+     * 쓰기 중 마지막 진척 시각 (초), 쉬는 중이면 0 - repl_last_partial_write 대응
+     * 조각(64KB)마다 갱신 - 느려도 나아가면 타임아웃 아님, 멈춘 채 repl-timeout 넘겨야 끊김
+     */
+    private volatile long lastProgress;
+    private static final int CHUNK = 64 * 1024;
 
     private boolean stopped;
 
@@ -80,8 +84,8 @@ final class ReplicaWriter {
         written.set(offset);
     }
 
-    long writeStartedAt() {
-        return writeStartedAt;
+    long lastProgress() {
+        return lastProgress;
     }
 
     void outOfBand(byte[] data) {
@@ -127,13 +131,13 @@ final class ReplicaWriter {
         try {
             while (true) {
                 Item item = queue.take();
-                writeStartedAt = Math.max(1, clock.getAsLong());
+                touch();
                 try {
                     if (!write(item)) {
                         return;
                     }
                 } finally {
-                    writeStartedAt = 0;
+                    lastProgress = 0;
                 }
             }
         } catch (InterruptedException e) {
@@ -165,6 +169,7 @@ final class ReplicaWriter {
                     ByteBuffer buffer = ByteBuffer.allocate(16 * 1024);
                     while (channel.read(buffer.clear()) > 0) {
                         out.write(buffer.array(), 0, buffer.position());
+                        touch();
                     }
                     out.flush();
                 }
@@ -173,7 +178,7 @@ final class ReplicaWriter {
             case Rdb rdb -> {
                 try {
                     out.write(rdb.prefix());
-                    out.write(rdb.payload());
+                    writeInChunks(rdb.payload());
                     out.write(rdb.suffix());
                     out.flush();
                 } catch (IOException e) {
@@ -189,6 +194,19 @@ final class ReplicaWriter {
             }
         }
         return true;
+    }
+
+    private void touch() {
+        lastProgress = Math.max(1, clock.getAsLong());
+    }
+
+    /** 조각마다 flush - 소켓이 받아 간 만큼이 진척 */
+    private void writeInChunks(byte[] data) throws IOException {
+        for (int offset = 0; offset < data.length; offset += CHUNK) {
+            out.write(data, offset, Math.min(CHUNK, data.length - offset));
+            out.flush();
+            touch();
+        }
     }
 
     private void failPending() {

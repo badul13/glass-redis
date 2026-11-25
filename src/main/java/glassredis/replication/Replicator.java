@@ -21,7 +21,9 @@ import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -65,11 +67,12 @@ public final class Replicator implements Replication {
      * @param outputSoftLimit         같은 설정의 soft
      * @param outputSoftSeconds       soft 를 넘긴 채 버티는 초
      * @param replicaReadOnly         replica-read-only - 레플리카일 때 쓰기 명령 거부
+     * @param ignoreDiskWriteErrors   replica-ignore-disk-write-errors - 디스크 오류 중 마스터 쓰기 명령을 받으면 no 는 종료, yes 는 경고 후 실행
      */
     public record Config(boolean disklessSync, long disklessSyncDelay, long disklessSyncMaxReplicas,
                          long backlogSize, long backlogTtl, long pingPeriod, long timeout,
                          long outputHardLimit, long outputSoftLimit, long outputSoftSeconds,
-                         boolean replicaReadOnly) {
+                         boolean replicaReadOnly, boolean ignoreDiskWriteErrors) {
 
         /** CONFIG_REPL_BACKLOG_MIN_SIZE */
         public static final long MIN_BACKLOG_SIZE = 16 * 1024;
@@ -82,7 +85,7 @@ public final class Replicator implements Replication {
                       long backlogSize, long backlogTtl, long pingPeriod, long timeout,
                       long outputHardLimit, long outputSoftLimit, long outputSoftSeconds) {
             this(disklessSync, disklessSyncDelay, disklessSyncMaxReplicas, backlogSize, backlogTtl, pingPeriod,
-                    timeout, outputHardLimit, outputSoftLimit, outputSoftSeconds, true);
+                    timeout, outputHardLimit, outputSoftLimit, outputSoftSeconds, true, false);
         }
 
         public static Config defaults() {
@@ -139,6 +142,10 @@ public final class Replicator implements Replication {
 
     /** 디스크리스 전송 - child_type RDB + rdb_child_type SOCKET, 없으면 null */
     private CompletableFuture<Void> socketTransfer;
+    /** 디스크리스 직렬화 결과 - 실패면 자식 비정상 종료 */
+    private CompletableFuture<byte[]> socketPayload;
+    /** 디스크리스 대상 레플리카별 전송 결과 */
+    private Map<ReplicaLink, CompletableFuture<Void>> socketTransfers = Map.of();
 
     private long statSyncFull;
     private long statSyncPartialOk;
@@ -575,10 +582,10 @@ public final class Replicator implements Replication {
         byte[] suffix = ascii(mark);
 
         CompletableFuture<byte[]> payload = CompletableFuture.supplyAsync(body::finish, rdbThread);
-        List<CompletableFuture<Void>> transfers = new ArrayList<>();
+        Map<ReplicaLink, CompletableFuture<Void>> transfers = new LinkedHashMap<>();
         for (ReplicaLink slave : targets) {
             CompletableFuture<Void> done = new CompletableFuture<>();
-            transfers.add(done);
+            transfers.put(slave, done);
             payload.whenComplete((bytes, error) -> {
                 if (error != null) {
                     done.completeExceptionally(error);
@@ -587,19 +594,40 @@ public final class Replicator implements Replication {
                 }
             });
         }
-        // 레플리카별 실패는 그 레플리카만 끊음 - 전송 자체는 끝난 것으로
-        socketTransfer = CompletableFuture.allOf(transfers.stream()
+        socketPayload = payload;
+        socketTransfers = transfers;
+        // 전부 끝나면(성공·실패 무관) 완료 - 결과 판정은 checkSocketChildDone
+        socketTransfer = CompletableFuture.allOf(transfers.values().stream()
                 .map(f -> f.exceptionally(e -> null))
                 .toArray(CompletableFuture[]::new));
         return true;
     }
 
-    /** checkChildrenDone 의 소켓 쪽 - 전송이 끝났으면 레플리카를 온라인으로 */
+    /**
+     * checkChildrenDone 의 소켓 쪽 - 전송이 끝났으면 결과 판정
+     * 직렬화 실패 - 자식 비정상 종료와 같음, 기다리던 레플리카 전부 끊음 (bgsaveerr)
+     * 레플리카별 쓰기 실패 - 그 레플리카만 끊음 (rdbPipeReadHandler 의 write error), RDB 못 받은 채 온라인 방지
+     */
     public void checkSocketChildDone() {
-        if (socketTransfer != null && socketTransfer.isDone()) {
-            socketTransfer = null;
-            backgroundSaveDone(true, true);
+        if (socketTransfer == null || !socketTransfer.isDone()) {
+            return;
         }
+        boolean payloadOk = !socketPayload.isCompletedExceptionally();
+        Map<ReplicaLink, CompletableFuture<Void>> transfers = socketTransfers;
+        socketTransfer = null;
+        socketPayload = null;
+        socketTransfers = Map.of();
+        if (payloadOk) {
+            transfers.forEach((slave, done) -> {
+                if (done.isCompletedExceptionally() && !slave.freed) {
+                    log("디스크리스 RDB 전송 중 쓰기 오류: %s", slave.name());
+                    free(slave, "디스크리스 RDB 전송 실패");
+                }
+            });
+        } else {
+            log("디스크리스 BGSAVE 직렬화 실패");
+        }
+        backgroundSaveDone(payloadOk, true);
     }
 
     /**
@@ -730,8 +758,8 @@ public final class Replicator implements Replication {
             }
             // 디스크리스 전송이 막힌 레플리카 - 쓰기가 끝나지 않은 채 repl-timeout 넘김
             if (slave.state == ReplicaLink.State.WAIT_BGSAVE_END && socketTransfer != null) {
-                long started = slave.writer.writeStartedAt();
-                if (started != 0 && now - started > config.timeout()) {
+                long progress = slave.writer.lastProgress();
+                if (progress != 0 && now - progress > config.timeout()) {
                     log("응답 없는 레플리카를 끊습니다 (전체 동기화): %s", slave.name());
                     free(slave, "전체 동기화 쓰기 타임아웃");
                 }

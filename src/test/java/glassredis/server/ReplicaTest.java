@@ -86,6 +86,57 @@ class ReplicaTest {
         }
     }
 
+    /** save 규칙 있는 레플리카 - dump.rdb 자리를 비지 않은 디렉터리로 막아 BGSAVE 실패 → MISCONF 상태로 */
+    private RedisServer brokenDiskReplica(boolean ignoreDiskWriteErrors, int masterPort) throws Exception {
+        Path home = Files.createDirectories(dir.resolve("broken-" + ignoreDiskWriteErrors));
+        Replicator.Config d = Replicator.Config.defaults();
+        Replicator.Config config = new Replicator.Config(true, 0, 0, d.backlogSize(), d.backlogTtl(), 3600,
+                60, d.outputHardLimit(), d.outputSoftLimit(), d.outputSoftSeconds(), true, ignoreDiskWriteErrors);
+        RedisServer server = new RedisServer("127.0.0.1", 0, CommandRegistry.withBuiltins(), EventBus.NONE,
+                new AppendOnlyLog(AppendOnlyLog.Config.defaults(home), EventBus.NONE),
+                new Snapshot(new Snapshot.Config(home, "dump.rdb", Snapshot.Config.parseSave("3600 1"), true)),
+                config);
+        server.replicaOf("127.0.0.1", masterPort);
+        server.start();
+        servers.add(server);
+        try (Client r = new Client(server.port())) {
+            await(() -> r.call("ROLE").contains("connected"));
+            Files.deleteIfExists(home.resolve("dump.rdb"));
+            Files.createDirectories(home.resolve("dump.rdb").resolve("block"));
+            r.call("BGSAVE");
+            await(() -> r.call("PING").startsWith("MISCONF"));
+        }
+        return server;
+    }
+
+    @Test
+    @DisplayName("디스크 오류 중 마스터 쓰기 명령 - replica-ignore-disk-write-errors no 면 레플리카 종료 (serverPanic)")
+    void replicaPanicsOnDiskErrorByDefault() throws Exception {
+        RedisServer master = start("m", 60, null, 0);
+        RedisServer replica = brokenDiskReplica(false, master.port());
+        try (Client m = new Client(master.port())) {
+            m.call("SET", "k", "1");
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    replica.awaitStop();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    @DisplayName("디스크 오류 중 마스터 쓰기 명령 - replica-ignore-disk-write-errors yes 면 경고 후 실행")
+    void replicaAppliesOnDiskErrorWhenIgnored() throws Exception {
+        RedisServer master = start("m", 60, null, 0);
+        RedisServer replica = brokenDiskReplica(true, master.port());
+        try (Client m = new Client(master.port()); Client r = new Client(replica.port())) {
+            m.call("SET", "k", "1");
+            await(() -> "1".equals(r.call("GET", "k")));
+        }
+    }
+
     @Test
     @DisplayName("마스터가 조용하면 repl-timeout 뒤 끊고, 캐시된 마스터로 PSYNC - 끊긴 동안 쓴 것만 이어 받음")
     void reconnectsWithPartialResync() throws Exception {
@@ -97,8 +148,10 @@ class ReplicaTest {
             await(() -> "1".equals(r.call("GET", "k")));
 
             // 마스터가 PING 을 안 보내니 2초 넘으면 레플리카가 링크를 끊고 다시 붙음
+            // 감지는 초 단위 시계·1초 주기 검사라 최대 약 4초 - 고정 대기 대신 재접속까지 대기
+            // (고정 3.5초였을 때: 감지 전 SET 도착 → 마지막 수신 갱신 → 재접속 없음, 간헐 실패)
             String fullBefore = m.call("ROLE");
-            Thread.sleep(3500);
+            await(() -> master.replicator().syncPartialOk() >= 1);
             m.call("SET", "k", "2");
             await(() -> "2".equals(r.call("GET", "k")));
             assertTrue(r.call("ROLE").contains("connected"), fullBefore);
