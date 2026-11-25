@@ -185,17 +185,50 @@ public final class AppendOnlyLog implements AutoCloseable {
      * @throws IOException 복구 실패 - 기동 중단
      */
     public void start(Keyspace keyspace, CommandRegistry registry) throws IOException {
+        start(keyspace, registry, () -> {
+        });
+    }
+
+    /** @param progress 로딩 중 주기적으로 - processEventsWhileBlocked */
+    public void start(Keyspace keyspace, CommandRegistry registry, Runnable progress) throws IOException {
         manifest = AofManifest.load(aofDir);
         if (!config.enabled()) {
             return;
         }
-        loadResult = new AofLoader(aofDir, registry, keyspace).load(manifest);
+        upgradeLegacyFile();
+        loadResult = new AofLoader(aofDir, registry, keyspace, progress).load(manifest);
         if (loadResult.status() == AofLoader.Status.FAILED) {
             throw new IOException("AOF 복구 실패: " + loadResult.error());
         }
         currentSize = loadResult.bytes();
         rewriteBaseSize = loadResult.baseBytes();
         openOnStart(keyspace);
+    }
+
+    /**
+     * loadAppendOnlyFiles 앞부분 + aofUpgradePrepare - Redis 7.0 전 방식의 dir/appendonly.aof 가 있으면
+     * 폴더가 없거나 manifest 가 비었거나, 옮기다 멈춘 흔적(base 만 그 이름인데 폴더에 없음)일 때
+     * manifest 에 seq 1 base 로 적고 파일을 appendonlydir 로 옮김
+     */
+    private void upgradeLegacyFile() throws IOException {
+        Path legacy = config.dir().resolve(AofManifest.FILENAME);
+        if (!Files.isRegularFile(legacy)) {
+            return;
+        }
+        AofManifest.FileInfo base = manifest.base();
+        boolean interrupted = base != null && manifest.incr().isEmpty() && base.name().equals(AofManifest.FILENAME)
+                && !Files.exists(aofDir.resolve(AofManifest.FILENAME));
+        if (Files.isDirectory(aofDir) && !manifest.isEmpty() && !interrupted) {
+            return;
+        }
+        Files.createDirectories(aofDir);
+        AofManifest next = new AofManifest();
+        next.useLegacyFileAsBase();
+        next.persist(aofDir);
+        Files.move(legacy, aofDir.resolve(AofManifest.FILENAME));
+        manifest = next;
+        System.out.printf("[glass-redis] Successfully migrated an old-style AOF file (%s) into the AOF directory (%s).%n",
+                AofManifest.FILENAME, DIRNAME);
     }
 
     public AofLoader.Result loadResult() {
@@ -543,8 +576,28 @@ public final class AppendOnlyLog implements AutoCloseable {
         bufferedCommands.clear();
     }
 
+    /** AOF_WAIT_REWRITE - 동기화 뒤 첫 재작성이 끝나기 전이라 AOF 가 아직 완전하지 않음 */
+    public boolean waitingInitialRewrite() {
+        return config.enabled() && !suspended && waitRewrite;
+    }
+
+    /** finishShutdown - flushAppendOnlyFile(1) 후 fsync, 실패는 기록만 */
+    public void flushAndSync() {
+        if (!config.enabled() || suspended) {
+            return;
+        }
+        flush(true);
+        if (channel != null) {
+            try {
+                channel.force(false);
+            } catch (IOException e) {
+                System.err.println("[glass-redis] Fail to fsync the AOF file: " + e.getMessage());
+            }
+        }
+    }
+
     /** killAppendOnlyChild - 쓰던 임시 base 는 쓰기 끝난 뒤 삭제 */
-    private void killRewrite() {
+    public void killRewrite() {
         Rewrite killed = rewrite;
         if (killed == null) {
             return;

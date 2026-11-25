@@ -54,6 +54,30 @@ public final class RedisServer implements AutoCloseable {
     private final CountDownLatch stopped = new CountDownLatch(1);
 
     private volatile boolean running;
+    /** 프로세스 종료 - 테스트에서 교체 */
+    private java.util.function.IntConsumer exit = System::exit;
+
+    /** 테스트용 - 신호 종료가 끝났을 때 System.exit 대신 */
+    void exitWith(java.util.function.IntConsumer action) {
+        this.exit = action;
+    }
+
+    /** shutdown-timeout - start() 전에 설정 */
+    private long shutdownTimeoutSeconds = 10;
+
+    /** shutdown-timeout (초) - 종료 때 뒤처진 레플리카를 기다리는 한도, 0 은 안 기다림 */
+    public void shutdownTimeout(long seconds) {
+        this.shutdownTimeoutSeconds = seconds;
+    }
+
+    /**
+     * SIGTERM·SIGINT - 플래그만, 실제 종료는 실행 스레드의 cron (저장 실패면 계속 돎)
+     *
+     * @return 종료 중 두 번째 SIGINT - 호출한 쪽이 저장 없이 즉시 종료
+     */
+    public boolean requestShutdown(boolean sigint) {
+        return commandLoop != null && commandLoop.requestShutdown(sigint);
+    }
     private ServerSocket serverSocket;
     private ExecutorService connectionExecutor;
     private CommandLoop commandLoop;
@@ -108,18 +132,7 @@ public final class RedisServer implements AutoCloseable {
         if (aof == null) {
             aof = new AppendOnlyLog(AppendOnlyLog.Config.defaults(Path.of(".")), events);
         }
-        aof.start(keyspace, registry);
-        RdbLoader.Result loaded = null;
-        // 마스터가 로드하며 버린 지난 만료 키 - 백로그에 DEL 로 (RDBFLAGS_FEED_REPL)
-        List<byte[]> expiredKeys = new ArrayList<>();
-        if (!aof.enabled() && snapshot != null) {
-            loaded = snapshot.load(keyspace, masterHost != null
-                    ? RdbLoader.Options.REPLICA : new RdbLoader.Options(false, expiredKeys::add));
-            if (loaded.status() == RdbLoader.Status.FAILED) {
-                throw new IOException("RDB 복구 실패: " + loaded.error());
-            }
-        }
-
+        // initServer 가 소켓을 먼저 열고 loadDataFromDisk - 로딩 중 접속은 -LOADING (processEventsWhileBlocked)
         serverSocket = new ServerSocket();
         // 재시작 시 TIME_WAIT 주소 재사용
         serverSocket.setReuseAddress(true);
@@ -129,14 +142,49 @@ public final class RedisServer implements AutoCloseable {
         commandLoop = new CommandLoop(keyspace, events, aof, snapshot, replication, this::close);
         commandLoop.registry(registry);
         commandLoop.port(serverSocket.getLocalPort());
+        commandLoop.shutdownTimeout(shutdownTimeoutSeconds);
+        // 신호로 시작한 종료가 저장까지 끝남 - 저장 없이 정리 후 프로세스 종료 (exit 0)
+        commandLoop.onShutdownFinished(() -> {
+            close();
+            Thread.ofPlatform().name("glass-redis-exit").start(() -> exit.accept(0));
+        });
+        // 접속 받기 전에 로딩 시작 - 첫 접속부터 -LOADING
+        commandLoop.beginLoading(masterHost != null && replication.replicaReadOnly());
+        connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
+
+        RdbLoader.Result loaded = null;
+        // 마스터가 로드하며 버린 지난 만료 키 - 백로그에 DEL 로 (RDBFLAGS_FEED_REPL)
+        List<byte[]> expiredKeys = new ArrayList<>();
+        try {
+            // 로더가 2MB·1024 명령마다 로딩 중 명령 처리 (이 스레드에서 - 실행 스레드는 아직)
+            Runnable progress = commandLoop::processEventsWhileLoading;
+            aof.start(keyspace, registry, progress);
+            if (!aof.enabled() && snapshot != null) {
+                loaded = snapshot.load(keyspace, (masterHost != null
+                        ? RdbLoader.Options.REPLICA : new RdbLoader.Options(false, expiredKeys::add)).withProgress(progress));
+                if (loaded.status() == RdbLoader.Status.FAILED) {
+                    throw new IOException("RDB 복구 실패: " + loaded.error());
+                }
+            }
+        } catch (IOException e) {
+            // 복구 실패 - 기동 중단 (Redis 는 exit 1)
+            close();
+            throw e;
+        }
+
         if (masterHost != null) {
             commandLoop.replicator().startAsReplica(masterHost, masterPort, loaded);
         } else if (!aof.enabled() && snapshot != null) {
             commandLoop.replicator().afterMasterLoad(loaded, expiredKeys);
         }
+        commandLoop.endLoading();
         commandLoop.start();
-        connectionExecutor = Executors.newVirtualThreadPerTaskExecutor();
-        Thread.ofPlatform().name("glass-redis-acceptor").start(this::acceptLoop);
+    }
+
+    /** server.loading - 기동 복구 중이거나 레플리카 동기화 RDB 로드 중 */
+    boolean loading() {
+        return commandLoop != null && commandLoop.loading();
     }
 
     /** 포트 0으로 열었으면 OS가 고른 포트 */
@@ -249,7 +297,7 @@ public final class RedisServer implements AutoCloseable {
             while (running) {
                 Socket socket = serverSocket.accept();
                 long id = nextConnectionId.getAndIncrement();
-                connectionExecutor.submit(new Connection(socket, registry, commandLoop, id, events));
+                connectionExecutor.submit(new Connection(socket, registry, commandLoop, id, events, this::loading));
             }
         } catch (IOException e) {
             if (running) {

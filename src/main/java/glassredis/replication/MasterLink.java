@@ -129,7 +129,8 @@ final class MasterLink {
         } catch (IOException e) {
             return "Error condition on socket for SYNC: " + e.getMessage();
         }
-        s.setTcpNoDelay(true);
+        // 마스터 링크도 createClient 를 거침 - nodelay + keepalive
+        TcpOptions.apply(s);
         touch();
         if (!call(() -> owner.linkConnected(this))) {
             return null;

@@ -192,6 +192,60 @@ public final class Replicator implements Replication {
     }
 
     /**
+     * finishShutdown 의 killRDBChild (소켓 대상) - 진행 중 디스크리스 전송 중단
+     * 받던 레플리카는 끊음 - 자식이 신호로 끝난 뒤 updateSlavesWaitingBgsave(C_ERR) 와 같은 결과
+     */
+    public void killSocketTransfer() {
+        if (socketTransfer == null) {
+            return;
+        }
+        log("There is a child saving an .rdb. Killing it!");
+        Map<ReplicaLink, CompletableFuture<Void>> transfers = socketTransfers;
+        socketTransfer = null;
+        socketPayload = null;
+        socketTransfers = Map.of();
+        for (ReplicaLink slave : transfers.keySet()) {
+            if (slave.state == ReplicaLink.State.WAIT_BGSAVE_END) {
+                free(slave, "디스크리스 전송 중단 (종료)");
+            }
+        }
+    }
+
+    /** isReadyToShutdown - 모든 레플리카가 지금 오프셋까지 ACK (레플리카 없으면 바로) */
+    public boolean readyToShutdown() {
+        long offset = buffer.masterReplOffset();
+        for (ReplicaLink slave : slaves) {
+            if (slave.ackOffset != offset) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** sendGetackToReplicas - 스트림에 REPLCONF GETACK * (오프셋도 늘어남) */
+    public void sendGetack() {
+        feed(-1, List.of(ascii("REPLCONF"), ascii("GETACK"), ascii("*")));
+    }
+
+    /** finishShutdown 앞부분 - 뒤처진 레플리카와 동기화된 수 기록 */
+    public void logReplicasAtShutdown() {
+        long offset = buffer.masterReplOffset();
+        long now = clock.getAsLong();
+        int lagging = 0;
+        for (ReplicaLink slave : slaves) {
+            if (slave.ackOffset != offset) {
+                lagging++;
+                long lag = slave.state == ReplicaLink.State.ONLINE ? now - slave.ackTime : 0;
+                log("Lagging replica %s reported offset %d behind master, lag=%d, state=%s.",
+                        slave.name(), offset - slave.ackOffset, lag, stateName(slave));
+            }
+        }
+        if (!slaves.isEmpty()) {
+            log("%d of %d replicas are in sync when shutting down.", slaves.size() - lagging, slaves.size());
+        }
+    }
+
+    /**
      * replicationFeedSlaves - 명령 하나를 RESP 배열로 스트림에 추가
      *
      * @param dbid -1 이면 SELECT 안 붙임 (MULTI, EXEC, PING)

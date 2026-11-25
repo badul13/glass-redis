@@ -58,10 +58,23 @@ public final class RdbLoader {
      * @param keepExpired  지난 만료 키도 넣음 - 레플리카 (지우는 건 마스터의 DEL)
      * @param onExpired    마스터가 버린 지난 만료 키 - RDBFLAGS_FEED_REPL 로 백로그에 DEL, 필요 없으면 null
      */
-    public record Options(boolean keepExpired, java.util.function.Consumer<byte[]> onExpired) {
+    public record Options(boolean keepExpired, java.util.function.Consumer<byte[]> onExpired, Runnable onProgress) {
         public static final Options MASTER = new Options(false, null);
         public static final Options REPLICA = new Options(true, null);
+
+        public Options(boolean keepExpired, java.util.function.Consumer<byte[]> onExpired) {
+            this(keepExpired, onExpired, () -> {
+            });
+        }
+
+        /** rdbLoadProgressCallback - 2MB 읽을 때마다 processEventsWhileBlocked */
+        public Options withProgress(Runnable progress) {
+            return new Options(keepExpired, onExpired, progress);
+        }
     }
+
+    /** loading_process_events_interval_bytes 기본값 */
+    static final int PROGRESS_INTERVAL_BYTES = 2 * 1024 * 1024;
 
     /** 손상 - rdbReportCorruptRDB, rdbReportReadError */
     private static final class CorruptRdbException extends RuntimeException {
@@ -76,6 +89,8 @@ public final class RdbLoader {
     /** RDBFLAGS_AOF_PREAMBLE - 지난 만료 키도 넣음, 지우는 건 복구 후 만료 처리 */
     private final boolean aofPreamble;
     private int pos;
+    /** 마지막으로 진행 콜백을 부른 위치 */
+    private int progressAt;
 
     private long keys;
     private long expired;
@@ -157,7 +172,12 @@ public final class RdbLoader {
     }
 
     static Preamble loadAofPreamble(byte[] data, Keyspace keyspace) {
-        RdbLoader loader = new RdbLoader(data, keyspace, true, Options.MASTER);
+        return loadAofPreamble(data, keyspace, () -> {
+        });
+    }
+
+    static Preamble loadAofPreamble(byte[] data, Keyspace keyspace, Runnable progress) {
+        RdbLoader loader = new RdbLoader(data, keyspace, true, Options.MASTER.withProgress(progress));
         Result result = loader.result(System.currentTimeMillis());
         return new Preamble(result, loader.pos);
     }
@@ -272,6 +292,10 @@ public final class RdbLoader {
                 }
                 keyspace.put(k, new Entry(value, expireAt));
                 keys++;
+            }
+            if (pos - progressAt >= PROGRESS_INTERVAL_BYTES) {
+                progressAt = pos;
+                options.onProgress().run();
             }
             expireAt = Entry.NO_EXPIRY;
         }

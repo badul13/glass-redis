@@ -24,6 +24,11 @@ public interface Command {
         return false;
     }
 
+    /** loading 플래그 - 데이터 로딩 중에도 실행 (그 밖은 -LOADING) */
+    default boolean allowedWhileLoading() {
+        return false;
+    }
+
     /** 응답 후 커넥션 종료 여부 - QUIT만 true */
     default boolean closesConnection() {
         return false;

@@ -275,4 +275,25 @@ class SnapshotTest {
         assertEquals(0, done.sinceSave());
         assertEquals(Files.size(dir.resolve("dump.rdb")), done.fileBytes());
     }
+
+    @Test
+    @DisplayName("종료 시 진행 중 BGSAVE 는 중단 - 옛 스냅샷이 마지막 저장을 덮지 않음, 임시 파일 정리")
+    void shutdownKillsBackgroundSave() throws Exception {
+        Snapshot snapshot = open("dump.rdb", true);
+        Keyspace keyspace = keyspace("old", "1");
+        for (int round = 0; round < 20; round++) {
+            snapshot.saveInBackground(keyspace, "BGSAVE");
+            keyspace.put(Key.of("new" + round), Entry.of("2".getBytes(StandardCharsets.UTF_8)));
+            assertNull(snapshot.shutdown(keyspace));
+
+            Keyspace loaded = new Keyspace();
+            assertEquals(RdbLoader.Status.OK, RdbLoader.load(dir.resolve("dump.rdb"), loaded, RdbLoader.Options.MASTER).status());
+            assertTrue(loaded.peek(Key.of("new" + round)) != null, round + "회차 - 마지막 저장 내용 유지");
+            snapshot = open("dump.rdb", true);
+        }
+        Thread.sleep(200);
+        try (var files = Files.list(dir)) {
+            assertFalse(files.anyMatch(p -> p.getFileName().toString().startsWith("temp-")), "임시 파일 삭제");
+        }
+    }
 }

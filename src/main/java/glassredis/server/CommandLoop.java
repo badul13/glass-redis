@@ -116,6 +116,35 @@ final class CommandLoop implements AutoCloseable {
     /** "디스크 오류 중 마스터 명령 실행" 경고 시각 (밀리초) - 10초에 한 번 */
     private long lastDiskErrorLogMillis;
 
+    private static final RespValue LOADING = new RespValue.Err("LOADING Redis is loading the dataset in memory");
+
+    /** server.loading - 기동 복구 또는 레플리카 동기화 RDB 로드 중 */
+    private volatile boolean loading;
+    /** loading 전환과 로딩 중 명령 넣기·옮기기를 묶는 잠금 */
+    private final Object loadingLock = new Object();
+    /** 로딩 중 통과한 명령 - 로더의 진행 콜백이 로딩 스레드에서 실행 */
+    private final List<Runnable> loadingTasks = new ArrayList<>();
+    /** beginLoading 때 찍은 거부 상태 - 접속 스레드가 읽음 */
+    private volatile RespValue loadingMisconf;
+    private volatile boolean loadingReadOnly;
+
+    /** 쓰기 명령 보류 표시 - 응답 아님, runBatch 가 나머지를 pausedBatches 로 */
+    private static final RespValue POSTPONED = new RespValue.Err("postponed");
+
+    /** shutdown_asap - 신호 받음, cron 이 종료 시도 (신호 처리기에선 플래그만) */
+    private volatile boolean shutdownAsap;
+    /** shutdown_mstime - 0 이 아니면 레플리카 기다리는 중 (isShutdownInitiated) */
+    private long shutdownDeadlineMillis;
+    /** shutdown-timeout (초) - 0 이면 레플리카 안 기다림 */
+    private volatile long shutdownTimeoutSeconds = 10;
+    /** PAUSE_DURING_SHUTDOWN - 쓰기 명령·만료 멈춤 */
+    private boolean writesPaused;
+    /** 멈춘 동안 보류한 묶음 나머지 - 종료 취소 시 다시 실행 */
+    private final List<Runnable> pausedBatches = new ArrayList<>();
+    /** finishShutdown 성공 - 저장까지 끝, 서버 정리와 프로세스 종료는 호출한 쪽 */
+    private volatile Runnable onShutdownFinished = () -> {
+    };
+
     /** stop() 한 번만 */
     private final AtomicBoolean stopping = new AtomicBoolean();
     /** stop() 마무리(저장 포함) 끝 */
@@ -236,9 +265,17 @@ final class CommandLoop implements AutoCloseable {
                 return "RDB 폴더를 fsync 하지 못함: " + e.getMessage();
             }
             log("MASTER <-> REPLICA 동기화: 메모리로 로드합니다");
-            RdbLoader.Result loaded = snapshot != null
-                    ? snapshot.load(keyspace, RdbLoader.Options.REPLICA)
-                    : RdbLoader.load(target, keyspace, RdbLoader.Options.REPLICA);
+            // rdbLoad 의 startLoading - 로드 동안 다른 클라이언트는 -LOADING (접속 스레드가 판정)
+            RdbLoader.Result loaded;
+            beginLoading(master.deniesWrite(new Client(-1, null, 0)));
+            try {
+                RdbLoader.Options options = RdbLoader.Options.REPLICA.withProgress(CommandLoop.this::processEventsWhileLoading);
+                loaded = snapshot != null
+                        ? snapshot.load(keyspace, options)
+                        : RdbLoader.load(target, keyspace, options);
+            } finally {
+                endLoading();
+            }
             if (snapshot == null) {
                 try {
                     Files.deleteIfExists(target);
@@ -300,31 +337,70 @@ final class CommandLoop implements AutoCloseable {
      * @return 요청과 같은 순서의 응답 - 레플리카가 된 연결이면 전부 NO_REPLY
      */
     CompletableFuture<List<RespValue>> submitAll(List<Request> requests, Client client) {
-        CompletableFuture<List<RespValue>> replies = new CompletableFuture<>();
+        return submitBatch(requests, client).thenCompose(CommandLoop::collect);
+    }
+
+    /**
+     * 묶음 응답 - 쓰기 보류로 멈추면 그때까지의 응답 + 나머지 (rest), 끝까지 실행했으면 rest 는 null
+     * 보류 지점 앞 명령의 응답은 먼저 보냄 - Redis 도 보류된 클라이언트의 앞 응답은 beforeSleep 에서 씀
+     */
+    record Replies(List<RespValue> values, CompletableFuture<Replies> rest) {
+    }
+
+    /** 한 커넥션이 한 번에 받은 명령들 - 응답은 부분씩 (쓰기 보류 시) */
+    CompletableFuture<Replies> submitBatch(List<Request> requests, Client client) {
+        CompletableFuture<Replies> replies = new CompletableFuture<>();
         queue.add(() -> {
             // 묶음 시작 시 보낼 응답 없음 - 앞 묶음은 이미 flush 됨
             client.pendingReplies(false);
-            List<RespValue> results = new ArrayList<>(requests.size());
-            for (Request request : requests) {
-                RespValue reply = request.command() == null
-                        ? Errors.unknownCommand(request.argv().get(0),
-                                request.argv().subList(1, request.argv().size()))
-                        : execute(request.command(), request.argv(), client);
-                if (!(reply instanceof RespValue.NoReply)) {
-                    if (client.isReplica()) {
-                        // 복제 링크는 응답용이 아님 - 응답이 생기면 끊음
-                        master.replicaGeneratedReply(client, new String(request.argv().get(0),
-                                StandardCharsets.ISO_8859_1));
-                        reply = RespValue.NO_REPLY;
-                    } else {
-                        client.pendingReplies(true);
-                    }
-                }
-                results.add(reply);
-            }
-            pendingReplies.add(() -> replies.complete(results));
+            runBatch(requests, 0, client, replies);
         });
         return replies;
+    }
+
+    private static CompletableFuture<List<RespValue>> collect(Replies part) {
+        if (part.rest() == null) {
+            return CompletableFuture.completedFuture(part.values());
+        }
+        return part.rest().thenCompose(CommandLoop::collect).thenApply(tail -> {
+            List<RespValue> all = new ArrayList<>(part.values());
+            all.addAll(tail);
+            return all;
+        });
+    }
+
+    /**
+     * 묶음 실행 - from 번째부터
+     * 종료 대기로 쓰기가 멈춘 동안 쓰기 명령을 만나면 거기서 멈춤 - 앞 응답은 지금, 나머지는 재개 때 (blockPostponeClient)
+     */
+    private void runBatch(List<Request> requests, int from, Client client, CompletableFuture<Replies> out) {
+        List<RespValue> results = new ArrayList<>(requests.size() - from);
+        for (int i = from; i < requests.size(); i++) {
+            Request request = requests.get(i);
+            RespValue reply = request.command() == null
+                    ? Errors.unknownCommand(request.argv().get(0),
+                            request.argv().subList(1, request.argv().size()))
+                    : execute(request.command(), request.argv(), client);
+            if (reply == POSTPONED) {
+                int resumeAt = i;
+                CompletableFuture<Replies> rest = new CompletableFuture<>();
+                pausedBatches.add(() -> runBatch(requests, resumeAt, client, rest));
+                pendingReplies.add(() -> out.complete(new Replies(results, rest)));
+                return;
+            }
+            if (!(reply instanceof RespValue.NoReply)) {
+                if (client.isReplica()) {
+                    // 복제 링크는 응답용이 아님 - 응답이 생기면 끊음
+                    master.replicaGeneratedReply(client, new String(request.argv().get(0),
+                            StandardCharsets.ISO_8859_1));
+                    reply = RespValue.NO_REPLY;
+                } else {
+                    client.pendingReplies(true);
+                }
+            }
+            results.add(reply);
+        }
+        pendingReplies.add(() -> out.complete(new Replies(results, null)));
     }
 
     /** 커넥션이 끝남 - 레플리카였으면 정리 */
@@ -475,13 +551,28 @@ final class CommandLoop implements AutoCloseable {
         Keyspace keyspace = context.keyspace();
         // server.lruclock = getLRUClock() - databasesCron 보다 먼저
         keyspace.updateLruClock();
-        if (!master.isReplica()) {
+        // activeExpireCycle - 만료가 멈춘 동안(종료 대기) 쉼
+        if (!master.isReplica() && !keyspace.expirePaused()) {
             activeExpire.run(ActiveExpireCycle.Kind.SLOW);
         }
         // databasesCron - 자식 작업 중엔 축소·rehash 생략 (copy-on-write 회피)
         if (!persistence.childActive()) {
             keyspace.tryResizeHashTables();
             keyspace.incrementallyRehash();
+        }
+        // serverCron 의 종료 처리 - 신호 처리기는 플래그만, 실제 종료는 여기서
+        if (shutdownAsap && shutdownDeadlineMillis == 0) {
+            if (prepareForShutdown()) {
+                onShutdownFinished.run();
+                return;
+            }
+        } else if (shutdownDeadlineMillis != 0) {
+            if (System.currentTimeMillis() >= shutdownDeadlineMillis || master.readyToShutdown()) {
+                if (finishShutdown()) {
+                    onShutdownFinished.run();
+                    return;
+                }
+            }
         }
         persistence.cron();
         // fsync 가 늦어 미룬 AOF 쓰기 재시도
@@ -500,7 +591,7 @@ final class CommandLoop implements AutoCloseable {
      */
     private void beforeSleep() {
         // 레플리카는 스스로 만료시키지 않음 - 마스터의 DEL 을 기다림
-        if (!master.isReplica()) {
+        if (!master.isReplica() && !context.keyspace().expirePaused()) {
             activeExpire.run(ActiveExpireCycle.Kind.FAST);
         }
         aof.flush();
@@ -540,6 +631,167 @@ final class CommandLoop implements AutoCloseable {
                 panic(fatal);
                 return;
             }
+        }
+    }
+
+    /** server.loading - 기동 복구 또는 레플리카 동기화 RDB 로드 중 */
+    boolean loading() {
+        return loading;
+    }
+
+    /**
+     * startLoading - 로딩하는 스레드에서 (기동 때는 실행 스레드 시작 전 main, 동기화 때는 실행 스레드)
+     * 거부 판정에 쓸 상태를 지금 찍어 둠 - 접속 스레드는 이 값만 읽음 (로드 동안 안 바뀜)
+     */
+    void beginLoading(boolean readOnlyReplica) {
+        loadingMisconf = persistence.denyWrites();
+        loadingReadOnly = readOnlyReplica;
+        synchronized (loadingLock) {
+            loading = true;
+        }
+    }
+
+    /**
+     * processEventsWhileBlocked - 로더가 2MB·1024 명령마다 로딩 스레드에서 부름
+     * 그사이 들어온 loading 플래그 명령(ECHO·ROLE…)을 실행하고 응답까지 전달
+     */
+    void processEventsWhileLoading() {
+        List<Runnable> tasks;
+        synchronized (loadingLock) {
+            tasks = List.copyOf(loadingTasks);
+            loadingTasks.clear();
+        }
+        if (tasks.isEmpty()) {
+            return;
+        }
+        tasks.forEach(Runnable::run);
+        pendingReplies.forEach(Runnable::run);
+        pendingReplies.clear();
+    }
+
+    /** stopLoading - 남은 것은 실행 큐로 (로딩 끝난 뒤 첫 작업들) */
+    void endLoading() {
+        processEventsWhileLoading();
+        synchronized (loadingLock) {
+            loading = false;
+            queue.addAll(loadingTasks);
+            loadingTasks.clear();
+        }
+    }
+
+    /**
+     * 로딩 중 processCommand - 접속 스레드에서
+     * 순서: 인자 수 → MISCONF → READONLY → LOADING, loading 플래그 명령은 통과 (null)
+     */
+    RespValue rejectWhileLoading(Command command, List<byte[]> argv, Client client) {
+        RespValue reply = Command.checkArity(command, argv.size());
+        if (reply != null) {
+            return reply;
+        }
+        if ((command.writes() || command instanceof PingCommand) && loadingMisconf != null) {
+            return loadingMisconf;
+        }
+        if (command.writes() && loadingReadOnly) {
+            return READONLY;
+        }
+        return command.allowedWhileLoading() ? null : LOADING;
+    }
+
+    /**
+     * 로딩 중 통과한 명령 하나 - 로더의 다음 진행 콜백에서 실행 (로딩이 이미 끝났으면 실행 큐로)
+     * 확인과 넣기가 endLoading 의 옮기기와 같은 잠금 - 끝나는 순간에 들어와도 빠지지 않음
+     */
+    CompletableFuture<List<RespValue>> submitWhileLoading(Request request, Client client) {
+        CompletableFuture<Replies> out = new CompletableFuture<>();
+        Runnable task = () -> {
+            client.pendingReplies(false);
+            runBatch(List.of(request), 0, client, out);
+        };
+        synchronized (loadingLock) {
+            if (loading) {
+                loadingTasks.add(task);
+            } else {
+                queue.add(task);
+            }
+        }
+        return out.thenCompose(CommandLoop::collect);
+    }
+
+    /**
+     * sigShutdownHandler - 신호 스레드에서 호출, 플래그만
+     * 종료 진행 중 SIGINT 를 또 받으면 저장·레플리카 대기 없이 즉시 종료 (exit 1)
+     *
+     * @return 즉시 종료해야 하면 true - 호출한 쪽이 halt
+     */
+    boolean requestShutdown(boolean sigint) {
+        if (shutdownAsap && sigint) {
+            System.err.println("[glass-redis] You insist... exiting now.");
+            persistence.removeTempFiles();
+            return true;
+        }
+        System.err.println(sigint ? "[glass-redis] Received SIGINT scheduling shutdown..."
+                : "[glass-redis] Received SIGTERM scheduling shutdown...");
+        shutdownAsap = true;
+        return false;
+    }
+
+    void shutdownTimeout(long seconds) {
+        shutdownTimeoutSeconds = seconds;
+    }
+
+    /** finishShutdown 성공 뒤 실행 스레드에서 호출 - 서버 정리·프로세스 종료 */
+    void onShutdownFinished(Runnable action) {
+        onShutdownFinished = action;
+    }
+
+    /**
+     * prepareForShutdown - 뒤처진 레플리카가 있으면 GETACK 보내고 쓰기·만료 멈춘 채 shutdown-timeout 까지 대기
+     *
+     * @return 종료 준비 끝(저장까지) - 대기 시작이거나 실패면 false
+     */
+    private boolean prepareForShutdown() {
+        log("User requested shutdown...");
+        if (shutdownTimeoutSeconds != 0 && !master.readyToShutdown()) {
+            shutdownDeadlineMillis = System.currentTimeMillis() + shutdownTimeoutSeconds * 1000;
+            master.sendGetack();
+            pauseForShutdown(true);
+            log("Waiting for replicas before shutting down.");
+            return false;
+        }
+        return finishShutdown();
+    }
+
+    /**
+     * finishShutdown - 레플리카 상태 기록, 자식 작업 정리, AOF fsync, 마지막 RDB
+     * 실패하면 종료 취소 후 계속 운영 (cancelShutdown)
+     */
+    private boolean finishShutdown() {
+        master.logReplicasAtShutdown();
+        String failure = persistence.finishShutdown();
+        if (failure != null) {
+            log("Errors trying to shut down the server. Check the logs for more information.");
+            cancelShutdown();
+            return false;
+        }
+        log("Redis is now ready to exit, bye bye...");
+        return true;
+    }
+
+    /** cancelShutdown - 대기 해제, 보류한 쓰기 재개 */
+    private void cancelShutdown() {
+        shutdownAsap = false;
+        shutdownDeadlineMillis = 0;
+        pauseForShutdown(false);
+    }
+
+    /** pauseActions(PAUSE_DURING_SHUTDOWN, PAUSE_ACTIONS_CLIENT_WRITE_SET) - 쓰기 명령·만료 */
+    private void pauseForShutdown(boolean pause) {
+        writesPaused = pause;
+        context.keyspace().setExpirePaused(pause);
+        if (!pause && !pausedBatches.isEmpty()) {
+            List<Runnable> resume = List.copyOf(pausedBatches);
+            pausedBatches.clear();
+            resume.forEach(queue::add);
         }
     }
 
@@ -603,6 +855,10 @@ final class CommandLoop implements AutoCloseable {
             reply = command.writes() || command instanceof PingCommand ? persistence.denyWrites() : null;
             if (reply == null && command.writes() && master.deniesWrite(client)) {
                 reply = READONLY;
+            }
+            // processCommand 끝 - 종료 대기로 쓰기가 멈췄으면 거부 대신 보류 (PAUSE_ACTION_CLIENT_WRITE)
+            if (reply == null && writesPaused && command.writes()) {
+                return POSTPONED;
             }
         }
         if (reply == null) {

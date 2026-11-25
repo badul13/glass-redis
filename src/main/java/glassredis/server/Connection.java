@@ -6,6 +6,7 @@ import glassredis.command.CommandRegistry;
 import glassredis.command.Errors;
 import glassredis.observe.Event;
 import glassredis.observe.EventBus;
+import glassredis.replication.TcpOptions;
 import glassredis.resp.RespProtocolException;
 import glassredis.resp.RespReader;
 import glassredis.resp.RespValue;
@@ -19,6 +20,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
+import java.util.function.BooleanSupplier;
 
 /** 커넥션 하나 - 가상 스레드 1개가 블로킹 읽기-실행-쓰기 반복 */
 final class Connection implements Runnable {
@@ -28,8 +30,12 @@ final class Connection implements Runnable {
     private final CommandLoop commandLoop;
     private final long id;
     private final EventBus events;
+    /** 데이터 로딩 중 - 기동 복구 또는 레플리카 동기화 로드 */
+    private final BooleanSupplier loading;
 
-    Connection(Socket socket, CommandRegistry registry, CommandLoop commandLoop, long id, EventBus events) {
+    Connection(Socket socket, CommandRegistry registry, CommandLoop commandLoop, long id, EventBus events,
+               BooleanSupplier loading) {
+        this.loading = loading;
         this.socket = socket;
         this.registry = registry;
         this.commandLoop = commandLoop;
@@ -45,8 +51,8 @@ final class Connection implements Runnable {
         }
         Client client = new Client(id, socket, now());
         try (Socket open = socket) {
-            // Nagle 끔 - 요청-응답에서 수십 ms 지연 유발
-            open.setTcpNoDelay(true);
+            // createClient - Nagle 끔(요청-응답에서 수십 ms 지연 유발) + tcp-keepalive 300
+            TcpOptions.apply(open);
 
             RespReader reader = new RespReader(open.getInputStream());
             RespWriter writer = new RespWriter(open.getOutputStream());
@@ -120,7 +126,22 @@ final class Connection implements Runnable {
                 // 응답 수신 전 다음 읽기 보류 - 파이프라인 순서 보장
                 List<RespValue> replies;
                 try {
-                    replies = commandLoop.submitAll(List.copyOf(batch), client).get();
+                    if (loading.getAsBoolean()) {
+                        replies = repliesWhileLoading(batch, client);
+                    } else {
+                        CommandLoop.Replies part = commandLoop.submitBatch(List.copyOf(batch), client).get();
+                        while (part.rest() != null) {
+                            // 쓰기 보류 - 보류 지점 앞 응답은 먼저 보내고 나머지를 기다림
+                            if (!client.isReplica()) {
+                                for (RespValue reply : part.values()) {
+                                    writer.write(reply);
+                                }
+                                writer.flush();
+                            }
+                            part = part.rest().get();
+                        }
+                        replies = part.values();
+                    }
                 } catch (InterruptedException e) {
                     // 서버 종료
                     Thread.currentThread().interrupt();
@@ -153,6 +174,25 @@ final class Connection implements Runnable {
                 return;
             }
         }
+    }
+
+    /**
+     * 로딩 중 - 명령 하나씩 접속 스레드에서 판정, 통과한 것만 실행 큐로 (로드 끝나면 실행)
+     * 묶음 도중 로딩이 끝나면 나머지는 평소대로
+     */
+    private List<RespValue> repliesWhileLoading(List<CommandLoop.Request> batch, Client client)
+            throws InterruptedException, ExecutionException {
+        List<RespValue> replies = new ArrayList<>(batch.size());
+        for (CommandLoop.Request request : batch) {
+            RespValue rejected = null;
+            if (loading.getAsBoolean()) {
+                rejected = request.command() == null
+                        ? Errors.unknownCommand(request.argv().get(0), request.argv().subList(1, request.argv().size()))
+                        : commandLoop.rejectWhileLoading(request.command(), request.argv(), client);
+            }
+            replies.add(rejected != null ? rejected : commandLoop.submitWhileLoading(request, client).get().get(0));
+        }
+        return replies;
     }
 
     private static void log(String format, Object... args) {

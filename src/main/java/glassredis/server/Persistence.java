@@ -208,6 +208,50 @@ final class Persistence implements ServerControl, Replicator.Children {
     }
 
     /** prepareForShutdown - AOF 마무리 뒤 save 규칙 있으면 마지막 RDB */
+    /**
+     * finishShutdown 의 저장 부분 - 실행 스레드에서, 서버는 아직 돎
+     * RDB 자식 중단 → AOF 재작성 중단(동기화 뒤 첫 재작성이면 종료 불가) → AOF fsync → 마지막 RDB
+     *
+     * @return 종료 불가 사유 - 저장까지 끝났으면 null
+     */
+    String finishShutdown() {
+        if (saving()) {
+            snapshot.killForShutdown();
+        }
+        // CHILD_TYPE_RDB 는 소켓 대상(디스크리스)도 포함
+        if (replication != null) {
+            replication.killSocketTransfer();
+        }
+        if (aof.rewriting()) {
+            if (aof.waitingInitialRewrite()) {
+                log("Writing initial AOF, can't exit.");
+                return "Writing initial AOF";
+            }
+            log("There is a child rewriting the AOF. Killing it!");
+            aof.killRewrite();
+        }
+        if (aof.enabled() && !aof.suspended()) {
+            log("Calling fsync() on the AOF file.");
+            aof.flushAndSync();
+        }
+        if (snapshot != null && !snapshot.config().saveParams().isEmpty()) {
+            log("Saving the final RDB snapshot before exiting.");
+            String failure = snapshot.save(keyspace, "종료");
+            if (failure != null) {
+                log("Error trying to save the DB, can't exit.");
+                return failure;
+            }
+        }
+        return null;
+    }
+
+    /** 두 번째 SIGINT - 저장 없이 즉시 종료, 임시 파일만 정리 */
+    void removeTempFiles() {
+        if (snapshot != null) {
+            snapshot.removeTempFiles();
+        }
+    }
+
     void shutdown() {
         aof.close();
         if (snapshot == null) {

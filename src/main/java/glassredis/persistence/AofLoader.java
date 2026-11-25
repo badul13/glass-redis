@@ -48,10 +48,20 @@ public final class AofLoader {
     /** FAILED 사유 */
     private String failure;
 
+    /** processEventsWhileBlocked - 1024 명령마다, RDB 부분은 2MB 마다 */
+    private final Runnable progress;
+    private long loops;
+
     public AofLoader(Path dir, CommandRegistry registry, Keyspace keyspace) {
+        this(dir, registry, keyspace, () -> {
+        });
+    }
+
+    public AofLoader(Path dir, CommandRegistry registry, Keyspace keyspace, Runnable progress) {
         this.dir = dir;
         this.registry = registry;
         this.context = new Context(keyspace);
+        this.progress = progress;
     }
 
     public Result load(AofManifest manifest) {
@@ -120,7 +130,7 @@ public final class AofLoader {
         }
         Reader in = new Reader(data);
         if (isRdb(data)) {
-            RdbLoader.Preamble preamble = RdbLoader.loadAofPreamble(data, context.keyspace());
+            RdbLoader.Preamble preamble = RdbLoader.loadAofPreamble(data, context.keyspace(), progress);
             if (preamble.result().status() != RdbLoader.Status.OK) {
                 // 잘린 RDB 도 잘라내기 없이 실패 - Error reading the RDB base file
                 return fail(path, "RDB 부분 읽기 실패 - " + preamble.result().error());
@@ -133,13 +143,28 @@ public final class AofLoader {
         List<List<byte[]>> queued = null;
 
         while (true) {
+            // loadSingleAppendOnlyFile - 명령 1024개마다 다른 클라이언트 처리 (로딩 중 응답)
+            if (loops++ % 1024 == 0) {
+                progress.run();
+            }
             int lineStart = in.pos;
             byte[] line = in.line();
             if (line == null) {
                 if (in.pos == lineStart) {
                     break; // 정상 끝
                 }
-                return truncate(path, validUpTo, "명령 중간에서 끝나"); // 줄 끝 개행 없이 끝남
+                // fgets 가 돌려준 개행 없는 조각 - 같은 검사 (# 는 주석, * 아니면 형식 오류, "*" 뿐이면 읽기 오류)
+                byte[] partial = in.slice(lineStart);
+                if (partial[0] == '#') {
+                    break;
+                }
+                if (partial[0] != '*') {
+                    return fail(path, "형식 오류 - '*' 로 시작하지 않는 줄");
+                }
+                if (partial.length > 1 && Reader.number(partial) < 1) {
+                    return fail(path, "형식 오류 - 인자 수가 1보다 작음");
+                }
+                return truncate(path, validUpTo, "명령 중간에서 끝나"); // 인자 줄을 못 읽음 - readerr
             }
             if (line.length > 0 && line[0] == '#') {
                 continue; // 시각 표시 같은 주석
@@ -153,8 +178,13 @@ public final class AofLoader {
             }
             List<byte[]> argv = new ArrayList<>((int) Math.min(argc, 1024));
             for (long j = 0; j < argc; j++) {
+                int lengthStart = in.pos;
                 byte[] lengthLine = in.line();
                 if (lengthLine == null) {
+                    // 개행 없는 조각도 '$' 가 아니면 형식 오류 (readres == NULL || buf[0] != '$')
+                    if (in.pos != lengthStart && in.slice(lengthStart)[0] != '$') {
+                        return fail(path, "형식 오류 - '$' 로 시작하지 않는 길이 줄");
+                    }
                     return truncate(path, validUpTo, "명령 중간에서 끝나");
                 }
                 if (lengthLine.length == 0 || lengthLine[0] != '$') {
@@ -265,6 +295,11 @@ public final class AofLoader {
             }
             pos = data.length;
             return null;
+        }
+
+        /** start 부터 끝까지 - 개행 없이 끝난 조각 */
+        byte[] slice(int start) {
+            return Arrays.copyOfRange(data, start, data.length);
         }
 
         byte[] bytes(long length) {

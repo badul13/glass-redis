@@ -86,6 +86,12 @@ public final class AofManifest {
         return base.name();
     }
 
+    /** aofUpgradePrepare - 옛 방식 단일 파일(appendonly.aof)을 seq 1 base 로 */
+    void useLegacyFileAsBase() {
+        base = new FileInfo(FILENAME, 1, 'b');
+        currentBaseSeq = 1;
+    }
+
     /** getNewIncrAofName */
     public String newIncr() {
         FileInfo info = new FileInfo(FILENAME + "." + (++currentIncrSeq) + ".incr.aof", currentIncrSeq, 'i');

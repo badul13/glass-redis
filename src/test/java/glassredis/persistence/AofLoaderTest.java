@@ -92,6 +92,22 @@ class AofLoaderTest {
     }
 
     @Test
+    @DisplayName("개행 없이 끝난 조각 - fgets 처럼 같은 검사: '*3' 은 잘라냄, '*' 아닌 조각·'$' 아닌 길이 조각은 형식 오류")
+    void partialLastLine() throws IOException {
+        String good = cmd("SET", "a", "1");
+        assertEquals(AofLoader.Status.TRUNCATED, load(files("", good + "*3")).status());
+
+        dir = Files.createDirectories(dir.resolve("garbage"));
+        assertEquals(AofLoader.Status.FAILED, load(files("", good + "xyz")).status());
+
+        dir = Files.createDirectories(dir.resolve("length"));
+        assertEquals(AofLoader.Status.FAILED, load(files("", good + "*1\r\nx")).status());
+
+        dir = Files.createDirectories(dir.resolve("star"));
+        assertEquals(AofLoader.Status.TRUNCATED, load(files("", good + "*")).status());
+    }
+
+    @Test
     @DisplayName("EXEC 없이 끝난 MULTI 는 MULTI 앞까지 되돌림")
     void incompleteTransaction() throws IOException {
         String good = cmd("SET", "a", "1");

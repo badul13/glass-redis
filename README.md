@@ -44,7 +44,7 @@ Java 21 이상 필요
 ./gradlew run          # 실행 (서버 6380, 대시보드 8080)
 ```
 
-옵션: `--port` `--bind` `--dashboard-bind` `--dashboard-port` `--no-dashboard`
+옵션: `--port` `--bind` `--dashboard-bind` `--dashboard-port` `--no-dashboard` `--shutdown-timeout`
 
 AOF 는 Redis 처럼 기본 꺼짐:
 

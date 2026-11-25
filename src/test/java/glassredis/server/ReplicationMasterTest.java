@@ -301,9 +301,15 @@ class ReplicationMasterTest {
             return buffer.toString(StandardCharsets.ISO_8859_1);
         }
 
+        /** 끊길 때까지 남은 복제 스트림(첫 cron 의 PING 등)은 읽고 버림 - 10초 안에 안 끊기면 false */
         boolean closedByServer() throws IOException {
             try {
-                return in.read() == -1;
+                while (in.read() != -1) {
+                    // 끊기 전에 도착한 스트림 바이트
+                }
+                return true;
+            } catch (SocketTimeoutException e) {
+                return false;
             } catch (IOException e) {
                 return true;
             }

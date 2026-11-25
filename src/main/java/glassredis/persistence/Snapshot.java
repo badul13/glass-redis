@@ -14,7 +14,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -103,7 +102,12 @@ public final class Snapshot {
 
     private final Config config;
     private final Path file;
+    /** SAVE 임시 파일 - temp-<pid>.rdb */
     private final Path temp;
+    /** BGSAVE 임시 파일 - Redis 는 자식 pid 라 SAVE 와 이름이 다름, 종료 시 SAVE 와 겹쳐도 충돌 없음 */
+    private final Path bgTemp;
+    /** 중단 확인과 이름 바꾸기를 묶음 - kill 뒤 옛 스냅샷이 dump.rdb 를 덮지 않게 */
+    private final Object replaceLock = new Object();
     private final EventBus events;
     /** 초 단위 현재 시각 - 테스트에서 교체 */
     private final LongSupplier clock;
@@ -152,6 +156,7 @@ public final class Snapshot {
         this.config = Objects.requireNonNull(config, "config");
         this.file = config.dir().resolve(config.filename());
         this.temp = config.dir().resolve("temp-" + ProcessHandle.current().pid() + ".rdb");
+        this.bgTemp = config.dir().resolve("temp-bg-" + ProcessHandle.current().pid() + ".rdb");
         this.events = Objects.requireNonNull(events, "events");
         this.clock = clock;
         this.lastSave = clock.getAsLong();
@@ -260,7 +265,7 @@ public final class Snapshot {
         AtomicBoolean killed = new AtomicBoolean();
         CompletableFuture<Long> written = CompletableFuture.supplyAsync(() -> {
             long writeStart = System.nanoTime();
-            String failure = writeFile(body.finish(), killed);
+            String failure = writeFile(body.finish(), bgTemp, killed);
             if (failure != null) {
                 throw new IllegalStateException(failure);
             }
@@ -275,7 +280,9 @@ public final class Snapshot {
      */
     public void killBackground() {
         if (bgsave != null) {
-            bgsave.killed().set(true);
+            synchronized (replaceLock) {
+                bgsave.killed().set(true);
+            }
         }
     }
 
@@ -411,19 +418,41 @@ public final class Snapshot {
     }
 
     /**
-     * 저장 없이 정리 - 진행 중 BGSAVE 는 끝날 때까지 대기
-     * Redis는 자식을 죽이고 임시 파일 삭제 - 여기선 SAVE 와 같은 임시 파일을 쓰므로 대기
+     * 저장 없이 정리 - 진행 중 BGSAVE 는 기다리지 않고 중단 (prepareForShutdown 의 killRDBChild + rdbRemoveTempFile)
+     * 중단 뒤엔 dump.rdb 를 덮지 않음 - 확인·이름 바꾸기가 같은 잠금
      */
     public void close() {
-        if (bgsave != null) {
-            try {
-                bgsave.written().get(30, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // 결과 무관 - 종료 중
-            }
-            bgsave = null;
-        }
+        killForShutdown();
         saveThread.shutdown();
+    }
+
+    /**
+     * finishShutdown 의 killRDBChild + rdbRemoveTempFile - 종료가 실패해 계속 돌 수 있어 쓰기 스레드는 유지
+     * 결과 처리(checkDone) 없이 버림 - lastbgsave_status 그대로
+     */
+    public void killForShutdown() {
+        if (bgsave != null) {
+            System.err.println("[glass-redis] There is a child saving an .rdb. Killing it!");
+            killBackground();
+            bgsave = null;
+            try {
+                // 쓰기 스레드가 아직 쓰는 중이면 지우지 못함 - 그 스레드가 중단을 보고 직접 지움
+                Files.deleteIfExists(bgTemp);
+            } catch (IOException ignored) {
+                // 쓰는 중 - 쓰기 스레드 몫
+            }
+        }
+    }
+
+    /** rdbRemoveTempFile - 두 번째 SIGINT 즉시 종료 때 */
+    public void removeTempFiles() {
+        for (Path path : List.of(temp, bgTemp)) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException ignored) {
+                // 쓰는 중 - 종료 중이라 무시
+            }
+        }
     }
 
     private byte[] serialize(Keyspace keyspace) {
@@ -437,7 +466,7 @@ public final class Snapshot {
     }
 
     private String writeFile(byte[] content) {
-        return writeFile(content, new AtomicBoolean());
+        return writeFile(content, temp, new AtomicBoolean());
     }
 
     /**
@@ -445,16 +474,18 @@ public final class Snapshot {
      *
      * @param killed 이름 바꾸기 전에 서면 임시 파일 지우고 Killed
      */
-    private String writeFile(byte[] content, AtomicBoolean killed) {
+    private String writeFile(byte[] content, Path temp, AtomicBoolean killed) {
         try {
             Files.createDirectories(config.dir());
             Files.write(temp, content);
             Fsync.file(temp);
-            if (killed.get()) {
-                Files.deleteIfExists(temp);
-                throw new Killed();
+            synchronized (replaceLock) {
+                if (killed.get()) {
+                    Files.deleteIfExists(temp);
+                    throw new Killed();
+                }
+                Fsync.replace(temp, file);
             }
-            Fsync.replace(temp, file);
         } catch (IOException e) {
             try {
                 Files.deleteIfExists(temp);

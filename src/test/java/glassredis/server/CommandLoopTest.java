@@ -77,6 +77,24 @@ class CommandLoopTest {
     }
 
     @Test
+    @DisplayName("로딩 중 판정 - 인자 수 오류 먼저, loading 플래그 명령(ECHO·ROLE…)은 통과, 나머지는 -LOADING")
+    void rejectsWhileLoading() {
+        glassredis.command.CommandRegistry registry = glassredis.command.CommandRegistry.withBuiltins();
+        glassredis.command.Client client = new glassredis.command.Client(1, null, 0);
+        List<byte[]> get = List.of("GET".getBytes(StandardCharsets.UTF_8), "k".getBytes(StandardCharsets.UTF_8));
+        List<byte[]> echo = List.of("ECHO".getBytes(StandardCharsets.UTF_8), "hi".getBytes(StandardCharsets.UTF_8));
+        List<byte[]> badGet = List.of("GET".getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(new RespValue.Err("LOADING Redis is loading the dataset in memory"),
+                loop.rejectWhileLoading(registry.find("GET"), get, client));
+        assertEquals(null, loop.rejectWhileLoading(registry.find("ECHO"), echo, client));
+        assertEquals(null, loop.rejectWhileLoading(registry.find("ROLE"),
+                List.of("ROLE".getBytes(StandardCharsets.UTF_8)), client));
+        assertTrue(loop.rejectWhileLoading(registry.find("GET"), badGet, client).toString()
+                .contains("wrong number of arguments"), "인자 수 검사가 LOADING 보다 먼저");
+    }
+
+    @Test
     @DisplayName("큐가 한 번도 비지 않는 부하에도 응답 전달 - aeMain 처럼 바퀴마다 beforeSleep")
     void repliesUnderConstantLoad() throws Exception {
         java.util.concurrent.atomic.AtomicBoolean busy = new java.util.concurrent.atomic.AtomicBoolean(true);

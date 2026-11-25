@@ -28,6 +28,8 @@ public final class Main {
         String bind = DEFAULT_BIND;
         // 대시보드는 인증 없음 - 서버를 0.0.0.0 으로 열어도 따로 지정해야 외부 공개
         String dashboardBind = DEFAULT_BIND;
+        // shutdown-timeout - 종료 때 뒤처진 레플리카 대기 한도 (초)
+        long shutdownTimeout = 10;
         int dashboardPort = DashboardServer.DEFAULT_PORT;
         boolean dashboard = true;
         // AOF - Redis 기본값
@@ -90,6 +92,8 @@ public final class Main {
                         "--repl-backlog-ttl", 0, Long.MAX_VALUE);
                 case "--repl-ping-replica-period", "--repl-ping-slave-period" -> pingPeriod = ranged(
                         requireValue(args, ++i, "--repl-ping-replica-period"), "--repl-ping-replica-period", 1, Integer.MAX_VALUE);
+                case "--shutdown-timeout" -> shutdownTimeout = ranged(requireValue(args, ++i, "--shutdown-timeout"),
+                        "--shutdown-timeout", 0, Integer.MAX_VALUE);
                 case "--repl-timeout" -> replTimeout = ranged(requireValue(args, ++i, "--repl-timeout"),
                         "--repl-timeout", 1, Integer.MAX_VALUE);
                 case "--replicaof", "--slaveof" -> {
@@ -131,7 +135,9 @@ public final class Main {
         if (masterHost != null) {
             server.replicaOf(masterHost, masterPort);
         }
+        server.shutdownTimeout(shutdownTimeout);
         server.start();
+        installSignalHandlers(server);
         reportAof(aof);
         reportRdb(snapshot);
 
@@ -149,6 +155,26 @@ public final class Main {
             server.shutdown();
         }));
         server.awaitStop();
+    }
+
+    /**
+     * SIGINT·SIGTERM 을 직접 처리 - Redis 처럼 플래그만 세우고 종료는 cron, 저장 실패면 계속 돎
+     * JVM 기본 처리(바로 종료 훅)였다면 실패해도 내려감
+     * 종료 진행 중 두 번째 SIGINT - 저장 없이 즉시 (exit 1, 종료 훅도 건너뜀)
+     */
+    @SuppressWarnings("removal")
+    private static void installSignalHandlers(RedisServer server) {
+        for (String name : List.of("INT", "TERM")) {
+            try {
+                sun.misc.Signal.handle(new sun.misc.Signal(name), signal -> {
+                    if (server.requestShutdown(name.equals("INT"))) {
+                        Runtime.getRuntime().halt(1);
+                    }
+                });
+            } catch (IllegalArgumentException unsupported) {
+                // 이 OS 에 없는 신호 - JVM 기본 처리(종료 훅)
+            }
+        }
     }
 
     /** 대시보드 기동 실패 시 서버 유지 - 경고만 출력 */
@@ -301,6 +327,7 @@ public final class Main {
                   --repl-backlog-size <크기>  끊긴 레플리카가 이어 받을 백로그 (기본 1mb)
                   --repl-backlog-ttl <초>  레플리카 없이 이만큼 지나면 백로그 해제 (기본 3600, 0은 안 함)
                   --repl-ping-replica-period <초>  복제 스트림에 PING 넣는 주기 (기본 10)
+                  --shutdown-timeout <초>  종료 때 뒤처진 레플리카 대기 한도 (기본 10, 0 은 안 기다림)
                   --repl-timeout <초>    레플리카 응답 없을 때 끊는 시간 (기본 60)
                   --client-output-buffer-limit "replica <hard> <soft> <초>"  레플리카 출력 버퍼 한도 (기본 256mb 64mb 60)
                   --replicaof <host> <port>  기동하면 이 마스터의 레플리카로 (REPLICAOF 명령과 같음)

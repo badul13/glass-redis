@@ -24,6 +24,11 @@ public final class SelectCommand implements Command {
     }
 
     @Override
+    public boolean allowedWhileLoading() {
+        return true;
+    }
+
+    @Override
     public int arity() {
         return 2;
     }

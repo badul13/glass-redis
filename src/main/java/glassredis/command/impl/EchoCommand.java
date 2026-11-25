@@ -15,6 +15,11 @@ public final class EchoCommand implements Command {
     }
 
     @Override
+    public boolean allowedWhileLoading() {
+        return true;
+    }
+
+    @Override
     public int arity() {
         return 2;
     }

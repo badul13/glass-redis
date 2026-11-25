@@ -191,6 +191,20 @@ class AppendOnlyLogTest {
     }
 
     @Test
+    @DisplayName("Redis 7.0 전 방식 dir/appendonly.aof - appendonlydir 의 seq 1 base 로 옮겨 복구 (aofUpgradePrepare)")
+    void migratesLegacySingleFile() throws IOException {
+        Files.writeString(dir.resolve("appendonly.aof"), "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$3\r\nold\r\n");
+        Keyspace keyspace = new Keyspace();
+        open(keyspace, 0, 64L << 20);
+
+        assertNotNull(keyspace.peek(Key.of("a")), "옛 파일 내용 복구");
+        assertFalse(Files.exists(dir.resolve("appendonly.aof")), "폴더 밖 원본은 옮겨짐");
+        assertTrue(Files.exists(dir.resolve(AppendOnlyLog.DIRNAME).resolve("appendonly.aof")));
+        assertEquals("file appendonly.aof seq 1 type b\nfile appendonly.aof.1.incr.aof seq 1 type i\n",
+                file(AofManifest.MANIFEST_NAME));
+    }
+
+    @Test
     @DisplayName("appendfsync always 쓰기 실패 - 되돌릴 수 없어 종료")
     void alwaysPolicyStopsOnWriteError() throws IOException {
         AppendOnlyLog aof = new AppendOnlyLog(new AppendOnlyLog.Config(dir, true,

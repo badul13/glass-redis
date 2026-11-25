@@ -18,6 +18,11 @@ public final class ReplconfCommand implements Command {
     }
 
     @Override
+    public boolean allowedWhileLoading() {
+        return true;
+    }
+
+    @Override
     public int arity() {
         return -1;
     }

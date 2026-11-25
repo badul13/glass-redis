@@ -91,6 +91,9 @@ public final class Keyspace {
     /** 마스터 스트림 실행 중 - 레플리카는 이때 만료를 보지 않음 (CLIENT_MASTER) */
     private boolean masterStream;
 
+    /** PAUSE_ACTION_EXPIRE - 종료 대기 중, 만료 키를 지우지 않고 없는 것으로만 보임 */
+    private boolean expirePaused;
+
     /** 직전 lookup 이 찾은 항목 - 값 제자리 교체(o->ptr 수정)를 재조회 없이 */
     private Key lookedUpKey;
     private Slot lookedUp;
@@ -176,6 +179,15 @@ public final class Keyspace {
     /** current_client 가 마스터인 동안 */
     public void setMasterStream(boolean executing) {
         this.masterStream = executing;
+    }
+
+    /** pauseActions 의 PAUSE_ACTION_EXPIRE - 주기적 만료도 이 값을 보고 쉼 */
+    public void setExpirePaused(boolean paused) {
+        this.expirePaused = paused;
+    }
+
+    public boolean expirePaused() {
+        return expirePaused;
     }
 
     /** mustObeyClient - 마스터 스트림 또는 AOF 로딩 중, 이미 받아들여진 명령이라 한도 검사 생략 */
@@ -288,6 +300,10 @@ public final class Keyspace {
             if ((flags & EXPIRE_FORCE_DELETE_EXPIRED) == 0) {
                 return true;
             }
+        }
+        // isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE) - 멈춘 동안 삭제 안 함
+        if (expirePaused) {
+            return true;
         }
         deleteExpired(key, when, reason);
         return true;
