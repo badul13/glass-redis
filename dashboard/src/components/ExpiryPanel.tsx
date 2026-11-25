@@ -2,7 +2,7 @@ import type { Dashboard } from '../useEventStream'
 import { millis } from '../format'
 
 /** 만료 주기 + 만료 시각부터 실제 삭제까지 지연 */
-export function ExpiryPanel({ cycles, removals, removalCounts, keyspace }: Dashboard) {
+export function ExpiryPanel({ cycles, removals, removalCounts, keyspace }: Pick<Dashboard, 'cycles' | 'removals' | 'removalCounts' | 'keyspace'>) {
   const expiredLate = removals.filter((removal) => removal.reason !== 'DELETED')
   const lateValues = expiredLate.map((removal) => removal.lateBy)
   const averageLate = lateValues.length
@@ -62,8 +62,7 @@ export function ExpiryPanel({ cycles, removals, removalCounts, keyspace }: Dashb
 
       {averageLate !== null && worstLate !== null && (
         <p className="verdict">
-          만료 시각이 지나고 실제로 지워지기까지 평균 <b>{millis(averageLate)}</b>, 최대{' '}
-          <b>{millis(worstLate)}</b> 걸렸습니다.
+          만료 시각부터 실제 삭제까지 평균 <b>{millis(averageLate)}</b> · 최대 <b>{millis(worstLate)}</b>
         </p>
       )}
 

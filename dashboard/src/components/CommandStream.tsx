@@ -37,15 +37,15 @@ export function CommandStream({ rows }: { rows: Row[] }) {
       <div className="stream-rows" ref={listRef} onScroll={onScroll}>
         {rows.length === 0 && (
           <p className="empty">
-            아직 아무 일도 일어나지 않았습니다.
+            기록 없음
             <br />
-            <code>redis-cli -p 6380</code> 로 붙어서 명령을 보내보세요.
+            <code>redis-cli -p 6380</code> 접속 후 명령 입력
           </p>
         )}
         {rows.map((row) =>
           row.kind === 'gap' ? (
             <div className="row gap" key={'gap-' + row.id}>
-              화면이 못 따라가서 {row.dropped}개를 건너뛰었습니다
+              화면 처리 지연 · {row.dropped}개 생략
             </div>
           ) : (
             <StreamRow key={row.event.seq} event={row.event} />

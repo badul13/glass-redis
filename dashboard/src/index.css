@@ -8,6 +8,8 @@
   --text: #d8dee2;
   --dim: #7c8a91;
   --faint: #4d585e;
+  /* 글자용 - --faint 는 패널 위 2.4:1 이라 선·막대에만, 글자는 4.5:1 이상 (패널 4.7, 머리줄 4.5) */
+  --faint-text: #78858c;
 
   --ok: #7dd3a0;
   --error: #f08a7a;
@@ -170,14 +172,14 @@ code {
 
 .hint {
   font-size: 11px;
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
 }
 
 .empty {
   margin: 0;
   padding: 24px 16px;
-  color: var(--faint);
+  color: var(--faint-text);
   font-size: 13px;
   text-align: center;
 }
@@ -216,12 +218,12 @@ code {
 }
 
 .row .time {
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
 }
 
 .row .conn {
-  color: var(--faint);
+  color: var(--faint-text);
   min-width: 2.5em;
 }
 
@@ -249,14 +251,14 @@ code {
 }
 
 .row .took {
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
   min-width: 4.5em;
   text-align: right;
 }
 
 .row .note {
-  color: var(--faint);
+  color: var(--faint-text);
   font-style: italic;
 }
 
@@ -320,7 +322,7 @@ table.keys td.type {
 
 /* 자료형별 색 - 가장 흔한 문자열은 흐리게 */
 table.keys .type-string {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 table.keys .type-list {
@@ -348,7 +350,7 @@ table.keys td.key {
 }
 
 table.keys td.size {
-  color: var(--faint);
+  color: var(--faint-text);
   text-align: right;
 }
 
@@ -360,7 +362,7 @@ table.keys td.ttl {
 }
 
 table.keys .forever {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 table.keys .soon {
@@ -427,7 +429,7 @@ table.keys .expired {
 
 .stats dt {
   font-size: 11px;
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .stats dd {
@@ -535,7 +537,7 @@ table.keys tr.selected {
 }
 
 .skiplist-caption .dim {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .skiplist-canvas {
@@ -597,7 +599,7 @@ table.keys tr.selected {
 .skiplist-svg .floor,
 .skiplist-svg .nil-label,
 .skiplist-svg .more {
-  fill: var(--faint);
+  fill: var(--faint-text);
   font-size: 10px;
 }
 
@@ -608,7 +610,7 @@ table.keys tr.selected {
 }
 
 .skiplist-svg .score {
-  fill: var(--faint);
+  fill: var(--faint-text);
   font-size: 10px;
   text-anchor: middle;
 }
@@ -631,7 +633,7 @@ table.keys tr.selected {
 
 table.keys td.type .encoding {
   margin-left: 6px;
-  color: var(--faint);
+  color: var(--faint-text);
   font-size: 10px;
 }
 
@@ -662,7 +664,7 @@ table.keys td.type .encoding {
 .lp-header {
   border-left: 1px solid #36424a;
   border-radius: 4px 0 0 4px;
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .lp-member {
@@ -675,12 +677,12 @@ table.keys td.type .encoding {
 }
 
 .lp-more {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .lp-end {
   border-radius: 0 4px 4px 0;
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .lp-pair.fresh .lp-cell {
@@ -776,7 +778,7 @@ table.keys td.type .encoding {
 
 .aof-file .name,
 .aof-file .size {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .aof-gauge {
@@ -828,7 +830,7 @@ table.keys td.type .encoding {
 }
 
 .aof-line.meta {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .aof-line.del {
@@ -837,7 +839,7 @@ table.keys td.type .encoding {
 
 .aof-mark {
   font-size: 11px;
-  color: var(--faint);
+  color: var(--faint-text);
   padding: 1px 0 3px 10px;
 }
 
@@ -928,7 +930,7 @@ table.keys td.type .encoding {
 }
 
 .rdb-summary .hold {
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .rdb-rule {
@@ -946,7 +948,7 @@ table.keys td.type .encoding {
 }
 
 .rdb-rule .rule-state {
-  color: var(--faint);
+  color: var(--faint-text);
   white-space: nowrap;
 }
 
@@ -987,7 +989,7 @@ table.keys td.type .encoding {
 
 .rdb-meter .label {
   font-size: 10.5px;
-  color: var(--faint);
+  color: var(--faint-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1015,7 +1017,7 @@ table.keys td.type .encoding {
 .rdb-save .time {
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .rdb-save .trigger {
@@ -1079,7 +1081,7 @@ table.keys td.type .encoding {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 10.5px;
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1116,7 +1118,7 @@ table.keys td.type .encoding {
 }
 
 .repl .label {
-  color: var(--faint);
+  color: var(--faint-text);
   font-size: 11px;
 }
 
@@ -1214,7 +1216,7 @@ table.keys td.type .encoding {
   margin-top: 4px;
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1227,7 +1229,7 @@ table.keys td.type .encoding {
 .repl-replicas th {
   text-align: left;
   font-weight: 500;
-  color: var(--faint);
+  color: var(--faint-text);
   padding: 6px 14px 4px;
 }
 
@@ -1270,7 +1272,7 @@ table.keys td.type .encoding {
 .repl-events .time,
 .repl-events .offset {
   font-family: var(--mono);
-  color: var(--faint);
+  color: var(--faint-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1314,7 +1316,7 @@ table.keys td.type .encoding {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
   font-size: 11px;
-  color: var(--faint);
+  color: var(--faint-text);
 }
 
 .repl-foot .busy {

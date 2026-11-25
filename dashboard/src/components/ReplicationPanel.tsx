@@ -29,7 +29,7 @@ const STATE_LABELS: Record<string, string> = {
  * 복제 ID·오프셋·백로그 창과 레플리카별 ACK 위치
  * 오프셋 자 - 백로그가 담은 구간 위에 레플리카 ACK 점, 창 밖으로 밀린 레플리카는 끊기면 전체 동기화
  */
-export function ReplicationPanel({ replication }: Dashboard) {
+export function ReplicationPanel({ replication }: Pick<Dashboard, 'replication'>) {
   if (replication === null) {
     return null
   }

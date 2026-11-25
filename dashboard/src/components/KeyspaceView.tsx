@@ -25,7 +25,7 @@ export function KeyspaceView({
 
       {keys.length === 0 ? (
         <p className="empty">
-          키가 없습니다. <code>SET hello world EX 10</code> 을 해보세요.
+          키 없음 · 예: <code>SET hello world EX 10</code>
         </p>
       ) : (
         <table className="keys">
@@ -62,7 +62,7 @@ export function KeyspaceView({
         </table>
       )}
 
-      {hidden > 0 && <p className="hint footnote">{hidden}개는 목록에서 생략했습니다</p>}
+      {hidden > 0 && <p className="hint footnote">목록 밖 {hidden}개 생략</p>}
     </section>
   )
 }

@@ -19,7 +19,7 @@ function fileFormat(name: string): string {
  * AOF 파일 구성·쓴 명령·fsync·재작성
  * 파일 막대 너비 - 크기 비례, incr 빗금 - fsync 전 바이트
  */
-export function AofPanel({ aof, aofEvents, rewriteStarted, rewriteFinished }: Dashboard) {
+export function AofPanel({ aof, aofEvents, rewriteStarted, rewriteFinished }: Pick<Dashboard, 'aof' | 'aofEvents' | 'rewriteStarted' | 'rewriteFinished'>) {
   if (aof === null) {
     return null
   }

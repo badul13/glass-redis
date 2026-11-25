@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { AofPanel } from './components/AofPanel'
 import { CommandStream } from './components/CommandStream'
 import { ExpiryPanel } from './components/ExpiryPanel'
@@ -14,6 +14,14 @@ const STATUS_LABELS = {
   live: '연결됨',
   offline: '끊김 · 다시 붙는 중',
 } as const
+
+// 받은 값이 바뀐 패널만 다시 그림 - 활동 100ms·스냅샷 500ms 마다 전체를 그리지 않게
+const CommandStreamMemo = memo(CommandStream)
+const AofPanelMemo = memo(AofPanel)
+const KeyspaceViewMemo = memo(KeyspaceView)
+const ExpiryPanelMemo = memo(ExpiryPanel)
+const RdbPanelMemo = memo(RdbPanel)
+const ReplicationPanelMemo = memo(ReplicationPanel)
 
 export default function App() {
   const dashboard = useEventStream()
@@ -37,14 +45,24 @@ export default function App() {
 
       <main className="grid">
         <div className="main-col">
-          <CommandStream rows={dashboard.rows} />
-          <AofPanel {...dashboard} />
+          <CommandStreamMemo rows={dashboard.rows} />
+          <AofPanelMemo
+            aof={dashboard.aof}
+            aofEvents={dashboard.aofEvents}
+            rewriteStarted={dashboard.rewriteStarted}
+            rewriteFinished={dashboard.rewriteFinished}
+          />
         </div>
         <div className="side">
-          <KeyspaceView snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
-          <ExpiryPanel {...dashboard} />
-          <RdbPanel {...dashboard} />
-          <ReplicationPanel {...dashboard} />
+          <KeyspaceViewMemo snapshot={dashboard.keyspace} selectedKey={selectedKey} onSelect={setSelectedKey} />
+          <ExpiryPanelMemo
+            cycles={dashboard.cycles}
+            removals={dashboard.removals}
+            removalCounts={dashboard.removalCounts}
+            keyspace={dashboard.keyspace}
+          />
+          <RdbPanelMemo rdb={dashboard.rdb} rdbSaves={dashboard.rdbSaves} />
+          <ReplicationPanelMemo replication={dashboard.replication} />
         </div>
       </main>
 

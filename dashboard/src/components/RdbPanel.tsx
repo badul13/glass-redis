@@ -8,7 +8,7 @@ import type { RdbSnapshot, SaveRule } from '../types'
  * 규칙 막대 - serverCron 판정 그대로: 지난 초 > seconds 이고 dirty >= changes
  * 저장 막대 - 명령 대기(직렬화) · 쓰기 · 완료 확인까지
  */
-export function RdbPanel({ rdb, rdbSaves }: Dashboard) {
+export function RdbPanel({ rdb, rdbSaves }: Pick<Dashboard, 'rdb' | 'rdbSaves'>) {
   if (rdb === null) {
     return null
   }

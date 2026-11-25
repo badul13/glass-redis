@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Score, SortedSetSnapshot } from './types'
+import { openStream } from './useEventStream'
 
 export interface SortedSetState {
   snapshot: SortedSetSnapshot
@@ -7,7 +8,7 @@ export interface SortedSetState {
   changed: Set<string>
 }
 
-/** 키 선택마다 새 연결 - 서버는 변경 시에만 전송 */
+/** 키 선택마다 새 연결 - 서버는 변경 시에만 전송, 끊기면 다시 연결 */
 export function useSortedSet(key: string | null): SortedSetState | null {
   const [state, setState] = useState<SortedSetState | null>(null)
 
@@ -17,22 +18,26 @@ export function useSortedSet(key: string | null): SortedSetState | null {
     }
     // null이면 첫 스냅샷 - 강조 없음
     let previous: Map<string, Score> | null = null
-    const source = new EventSource('/api/zset?key=' + encodeURIComponent(key))
-
-    source.addEventListener('zset', (event) => {
-      const snapshot = JSON.parse(event.data) as SortedSetSnapshot
-      const before = previous
-      const changed = new Set(
-        before === null
-          ? []
-          : snapshot.nodes.filter((node) => before.get(node.member) !== node.score).map((node) => node.member),
-      )
-      previous = new Map(snapshot.nodes.map((node) => [node.member, node.score]))
-      setState({ snapshot, changed })
-    })
+    const close = openStream(
+      '/api/zset?key=' + encodeURIComponent(key),
+      {
+        zset: (data) => {
+          const snapshot = JSON.parse(data) as SortedSetSnapshot
+          const before = previous
+          const changed = new Set(
+            before === null
+              ? []
+              : snapshot.nodes.filter((node) => before.get(node.member) !== node.score).map((node) => node.member),
+          )
+          previous = new Map(snapshot.nodes.map((node) => [node.member, node.score]))
+          setState({ snapshot, changed })
+        },
+      },
+      () => {},
+    )
 
     return () => {
-      source.close()
+      close()
       setState(null)
     }
   }, [key])
